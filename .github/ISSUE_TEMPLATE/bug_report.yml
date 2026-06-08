@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a problem with the provider.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        **Security issues should NOT be filed here.** Email
+        **security@gorgias.com** instead. See [SECURITY.md](../SECURITY.md).
+
+  - type: input
+    id: provider_version
+    attributes:
+      label: Provider version
+      description: e.g. 0.1.0, or a commit SHA if built from source.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: terraform_version
+    attributes:
+      label: Terraform / OpenTofu version
+      description: Output of `terraform version` or `tofu version`.
+      placeholder: "Terraform 1.9.5"
+    validations:
+      required: true
+
+  - type: textarea
+    id: tf_config
+    attributes:
+      label: Terraform configuration
+      description: A minimal `.tf` file that reproduces the issue.
+      render: hcl
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: |
+        Include the exact error and, if relevant, `TF_LOG=DEBUG` output.
+        **Redact any secrets before pasting** — the provider redacts them
+        at the source, but verify before sharing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Workarounds tried, ACM environment shape, anything else.

@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: |
+        What are you trying to accomplish? Describe the operator workflow,
+        not just the proposed solution — we often have a different approach
+        in mind that solves the same problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        Optional. If you have a specific shape in mind (new resource, new
+        attribute, etc.), describe it here.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you've thought about, including workarounds.

@@ -1,0 +1,58 @@
+name: release
+
+# Fires on semver tags (v0.1.0, v1.2.3, v2.0.0-rc.1, ...). The release notes
+# are extracted from CHANGELOG.md for the matching version section; the
+# maintainer is expected to promote the "Unreleased" entries to the new
+# version heading BEFORE tagging (see CONTRIBUTING.md "Releasing").
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required: goreleaser creates a GitHub release
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so goreleaser can read tags/commits
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          NOTES_PATH="${RUNNER_TEMP}/release-notes.md"
+          bash scripts/release-notes.sh "${VERSION}" > "${NOTES_PATH}"
+          if [ ! -s "${NOTES_PATH}" ]; then
+            echo "::error::No CHANGELOG.md section found for version ${VERSION}. Did you promote [Unreleased] to [${VERSION}] before tagging?"
+            exit 1
+          fi
+          echo "notes_path=${NOTES_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "----- Release notes -----"
+          cat "${NOTES_PATH}"
+          echo "-------------------------"
+
+      - name: Import GPG key
+        id: gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean --release-notes ${{ steps.notes.outputs.notes_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.gpg.outputs.fingerprint }}

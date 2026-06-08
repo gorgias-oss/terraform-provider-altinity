@@ -1,0 +1,40 @@
+{
+  "data": [
+    {
+      "id": "1",
+      "name": "example-env",
+      "type": "kubernetes",
+      "domain": "example-env.altinity.cloud",
+      "status": "online",
+      "state": "running",
+      "displayName": "example-env",
+      "normalizedName": "example-env",
+      "id_owner": "1",
+      "id_parent": null,
+      "created": "2025-01-01 00:00:00",
+      "managed": true,
+      "remote": false,
+      "hostedByAltinity": true,
+      "kubeProvider": "gcp",
+      "kubeLBType": "ingress",
+      "kubeNamespace": "altinity-cloud-managed-clickhouse",
+      "kubeAPIUrl": "https://example-env.internal.example/api",
+      "kubeToken": "",
+      "user": "clickhouse_operator",
+      "pass": "",
+      "awsKey": null,
+      "awsSecretKey": null,
+      "awsPrivateKey": null,
+      "awsKeyPairName": null,
+      "datadogPassword": null,
+      "datadogSettings": {"enabled": false, "key": "", "region": "", "tableStats": false},
+      "backupOptions": {"enable": false, "provider": "", "bucket": "", "secretKey": ""},
+      "options": {"region": "us-east1", "azlist": ["us-east1-b", "us-east1-c"], "network": "10.0.0.0/24"},
+      "publicLB": true,
+      "privateLB": false,
+      "monitoring": true,
+      "monitoringUrl": "",
+      "owner": {"name": "Test User", "email": "noreply@example.com", "id_organization": "1"}
+    }
+  ]
+}

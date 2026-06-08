@@ -1,0 +1,1 @@
+terraform import altinity_clickhouse_profile_setting.example 456:max_memory_usage

@@ -1,0 +1,66 @@
+# GoReleaser config for the Terraform Registry.
+#
+# Required secrets (set in the GitHub repo / org settings):
+#   GPG_PRIVATE_KEY  — ASCII-armored, exported private key
+#   PASSPHRASE       — passphrase for the key (empty if key is unencrypted)
+#
+# Driven by `.github/workflows/release.yml` on `v*` tags. Release notes come
+# from CHANGELOG.md via `scripts/release-notes.sh` (see CONTRIBUTING.md).
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: terraform-provider-altinity
+    main: ./cmd/terraform-provider-altinity
+    binary: '{{ .ProjectName }}_v{{ .Version }}'
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - '-s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }}'
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: ['zip']
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      - --batch
+      - --local-user
+      - '{{ .Env.GPG_FINGERPRINT }}'
+      - --output
+      - '${signature}'
+      - --detach-sign
+      - '${artifact}'
+
+release:
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+  draft: false
+  prerelease: auto
+
+# We curate CHANGELOG.md by hand; the release workflow passes
+# `--release-notes` to override GoReleaser's auto-generated notes.
+changelog:
+  disable: true

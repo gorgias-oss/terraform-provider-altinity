@@ -1,0 +1,29 @@
+# Local development override: point Terraform/OpenTofu at the locally built
+# provider binary instead of pulling from a registry.
+#
+# Typical inner-loop workflow:
+#   make -C ../.. build               # builds ../bin/terraform-provider-altinity
+#   cp dev.tfrc.example dev.tfrc      # then edit the absolute path below
+#   TF_CLI_CONFIG_FILE=$PWD/dev.tfrc terraform -chdir=complete plan
+#
+# IMPORTANT: with dev_overrides, do NOT run `terraform init`. Terraform still
+# performs a registry lookup for any provider in `required_providers` and
+# will error on `gorgias/altinity` until it's published — even when the
+# override means we never actually fetch from the registry.
+#
+# If the example config also pulls in OTHER providers (e.g. hashicorp/random),
+# install them once via the local plugin mirror approach instead:
+#
+#   make -C ../.. install             # copies the binary into
+#                                     # ~/.terraform.d/plugins/.../gorgias/altinity/...
+#   unset TF_CLI_CONFIG_FILE          # back to the normal init path
+#   terraform -chdir=complete init
+#   terraform -chdir=complete plan
+#
+# dev_overrides requires an ABSOLUTE path. dev.tfrc itself is gitignored.
+provider_installation {
+  dev_overrides {
+    "gorgias/altinity" = "/ABSOLUTE/PATH/TO/terraform-provider-altinity/bin"
+  }
+  direct {}
+}
