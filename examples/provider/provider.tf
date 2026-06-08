@@ -1,0 +1,23 @@
+terraform {
+  required_version = ">= 1.5.7"
+  required_providers {
+    altinity = {
+      source  = "gorgias/altinity"
+      version = ">= 0.1.0"
+    }
+  }
+}
+
+provider "altinity" {
+  # The ACM API token. May be omitted here and supplied via the
+  # ALTINITYCLOUD_API_TOKEN environment variable instead.
+  api_token = var.altinity_api_token
+
+  # api_url defaults to https://acm.altinity.cloud/api and rarely needs setting.
+  # api_url = "https://acm.altinity.cloud/api"
+}
+
+variable "altinity_api_token" {
+  type      = string
+  sensitive = true
+}

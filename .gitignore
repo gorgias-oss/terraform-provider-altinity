@@ -1,0 +1,39 @@
+# Build output
+/bin/
+*.exe
+*.test
+*.out
+
+# Go
+vendor/
+
+# Terraform / OpenTofu
+**/.terraform/
+**/.terraform.tfstate.lock.info
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/terraform.tfvars
+**/*.auto.tfvars
+**/crash.log
+**/crash.*.log
+
+# Local debug logs (may contain credentials)
+**/tf_debug_log.log
+**/*.tflog
+
+# Local dev override config (uses absolute paths, machine-specific)
+examples/dev.tfrc
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Acceptance-test credentials
+.env
+.envrc
