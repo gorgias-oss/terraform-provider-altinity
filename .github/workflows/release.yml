@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0   # full history so goreleaser can read tags/commits
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
