@@ -1,0 +1,204 @@
+{
+  "id": "641",
+  "name": "gorgias-prod-aus-se1-fcb9",
+  "created": "2023-05-12 06:37:59",
+  "type": "kubernetes",
+  "domain": "gorgias-prod-aus-se1-fcb9.altinity.cloud",
+  "externalDNS": "1",
+  "sslCertificateARN": "",
+  "autoPush": true,
+  "autoZkPush": "1",
+  "user": "clickhouse_operator",
+  "pass": "*******",
+  "awsKey": null,
+  "awsSecretKey": null,
+  "awsKeyPairName": null,
+  "awsPrivateKey": null,
+  "awsSettings": null,
+  "awsSettingsAuto": false,
+  "kubeCheck": "2026-06-09 16:11:39",
+  "kubeCHOVersion": "0.25.2",
+  "kubeNamespace": "altinity-cloud-managed-clickhouse",
+  "kubeNamespaceManage": false,
+  "kubeAPIUrl": "https://k8s.gorgias-prod-aus-se1-fcb9.altinity.cloud",
+  "kubeToken": "REDACTED-K8S-SA-TOKEN",
+  "kubeCanUninstall": null,
+  "kubeNodeLabel": null,
+  "monitoring": true,
+  "monitoringUrl": "https://grafana.gorgias-prod-aus-se1-fcb9.altinity.cloud/monitoring/gorgias-prod-aus-se1-fcb9",
+  "monitoringInfo": {
+    "db/reporting": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/dashboards/f/cesla39k4rpxcd/reporting",
+      "uid": "cesla39k4rpxcd"
+    },
+    "db/reporting-alerts": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/dashboards/f/cep7vmelbyi9sd/reporting-alerts",
+      "uid": "cep7vmelbyi9sd"
+    },
+    "db/ch-nodes-monitoring": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/aesokpo05sohsa/ch-nodes-monitoring",
+      "uid": "aesokpo05sohsa"
+    },
+    "db/clickhouse": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/altinity-clickhouse-operator-dashboard/clickhouse",
+      "uid": "altinity-clickhouse-operator-dashboard"
+    },
+    "db/clickhouse-logs": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/logs-dashboard/clickhouse-logs",
+      "uid": "logs-dashboard"
+    },
+    "db/clickhouse-monitoring": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/WEkMFOUVk/clickhouse-monitoring",
+      "uid": "WEkMFOUVk"
+    },
+    "db/clickhouse-monitoring-query-cache-added": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/query-cache-added/clickhouse-monitoring-query-cache-added",
+      "uid": "query-cache-added"
+    },
+    "db/clickhouse-queries": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/clickhouse-queries/clickhouse-queries",
+      "uid": "clickhouse-queries"
+    },
+    "db/clickhouse-queries-analysis": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/clickhouse-queries-analysis/clickhouse-queries-analysis",
+      "uid": "clickhouse-queries-analysis"
+    },
+    "db/cube-queries-durations": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/beq7vjy6yj30gc/cube-queries-durations",
+      "uid": "beq7vjy6yj30gc"
+    },
+    "db/node-exporter-full": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/node-exporter-full/node-exporter-full",
+      "uid": "node-exporter-full"
+    },
+    "db/system-load": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/system-load/system-load",
+      "uid": "system-load"
+    },
+    "db/zookeeper": {
+      "url": "/monitoring/gorgias-prod-aus-se1-fcb9/d/zookeeper-dashboard/zookeeper",
+      "uid": "zookeeper-dashboard"
+    }
+  },
+  "dashboardUrl": "",
+  "backupOptions": {
+    "secretKey": "*******",
+    "region": "",
+    "bucket": "altinity-cloud-prod-000fmrnuv8-clickhouse-backup",
+    "provider": "gcp",
+    "compressionFormat": "tar",
+    "day": 0,
+    "time": "05:00",
+    "keep": "7",
+    "schedule": "daily",
+    "enable": true,
+    "path": ""
+  },
+  "options": {
+    "azlist": [
+      "australia-southeast1-a",
+      "australia-southeast1-b",
+      "australia-southeast1-c"
+    ],
+    "network": "0.0.0.0/0",
+    "sizeMultiplier": "10",
+    "region": "australia-southeast1"
+  },
+  "resourceLimits": {
+    "storage": 5000,
+    "memory": "0",
+    "cpu": 160,
+    "shards": 20,
+    "replicas": 3,
+    "volumeRescale": 10,
+    "nodes": 0,
+    "minVolumeSize": 100,
+    "minSt1VolumeSize": "1000"
+  },
+  "notes": null,
+  "id_owner": "104",
+  "id_parent": null,
+  "kubeLBType": "ingress",
+  "kubeProvider": "gcp",
+  "vpcEndpoints": false,
+  "listenCheck": "2026-06-09 16:11:36",
+  "datadogSettings": {
+    "enabled": true,
+    "key": "REDACTED-DATADOG-KEY",
+    "region": "datadoghq.com",
+    "logs": false,
+    "metrics": false,
+    "tableStats": false
+  },
+  "datadogPassword": "*******",
+  "kubeAuthOptions": {
+    "type": "token",
+    "clientKey": "",
+    "clientCert": "",
+    "caCert": ""
+  },
+  "status": "online",
+  "sniProxyForCH": false,
+  "kubeManagedPVs": true,
+  "logsStorage": {
+    "bucket": "",
+    "region": ""
+  },
+  "imageRegistry": null,
+  "normalizedName": "gorgias-prod-aus-se1-fcb9",
+  "kubeStartupTime": null,
+  "managed": false,
+  "monitoringCheck": "2026-06-09 16:07:51",
+  "logsOptions": [],
+  "publicLB": false,
+  "privateLB": false,
+  "displayName": "gorgias-prod-aus-se1-fcb9",
+  "state": null,
+  "remote": false,
+  "hostedByAltinity": false,
+  "kubeZoneKey": null,
+  "loadBalancePROXYProtocolV2": false,
+  "userAgent": null,
+  "internalEncryption": false,
+  "updatedAtBackend": null,
+  "useKeeper": false,
+  "hipaaCompliant": false,
+  "organization": {
+    "id": "438",
+    "name": "Gorgias",
+    "emailDomain": "gorgias.com",
+    "inheritEnvironment": null,
+    "opened": false,
+    "id_owner": "104",
+    "id_defaultUserRole": "6",
+    "blocked": false,
+    "companyName": "Gorgias",
+    "trialExpiry": null,
+    "supportPlan": "enterprise",
+    "blockedPassword": true,
+    "blockedAPI": false,
+    "autoCharge": false,
+    "allowAdminPassword": true,
+    "oktaSettings": "{\"enableRoleSync\":false,\"apiKey\":\"\",\"domain\":\"\",\"denyAccessIfNotInOkta\":false,\"userGroupsToRole\":[]}",
+    "trialExpiryToBeSet": false,
+    "enable2FA": true,
+    "quotas": null,
+    "userSyncSettings": {
+      "requireIdPGroups": false,
+      "restrictToIdPGroup": "",
+      "enableRoleSync": false,
+      "idPGroupsToRole": []
+    },
+    "limited": false,
+    "autoChargeNoLimit": false,
+    "expired": false,
+    "trial": false
+  },
+  "coreCIDR": "34.238.65.247,44.195.72.25,100.24.75.12,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,10.128.0.0/21",
+  "isAnywhere": false,
+  "owner": {
+    "name": "Service Account",
+    "email": "dev@altinity.com",
+    "id_organization": "2"
+  }
+}
