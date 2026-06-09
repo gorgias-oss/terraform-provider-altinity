@@ -114,7 +114,7 @@ func TestGenerateNoDiff(t *testing.T) {
 	}
 
 	// Run the generator (cwd is this package dir = internal/acm/wire).
-	cmd := exec.Command("go", "run", "github.com/Gorgias/terraform-provider-altinity/tools/specgen")
+	cmd := exec.Command("go", "run", "github.com/gorgias-oss/terraform-provider-altinity/tools/specgen")
 	cmd.Dir = "."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go generate failed: %v\n%s", err, out)

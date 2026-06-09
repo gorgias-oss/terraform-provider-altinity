@@ -17,7 +17,7 @@ disclosure process and the security invariants we maintain.
 
 ## Reporting bugs and requesting features
 
-For non-security issues, open a [GitHub issue](https://github.com/Gorgias/terraform-provider-altinity/issues).
+For non-security issues, open a [GitHub issue](https://github.com/gorgias-oss/terraform-provider-altinity/issues).
 Include:
 
 - The provider version and Terraform/OpenTofu version.
@@ -41,7 +41,7 @@ Prerequisites:
 Clone and build:
 
 ```sh
-git clone https://github.com/Gorgias/terraform-provider-altinity.git
+git clone https://github.com/gorgias-oss/terraform-provider-altinity.git
 cd terraform-provider-altinity
 make build       # produces bin/terraform-provider-altinity
 make test        # offline test suite (~5s)
@@ -240,6 +240,6 @@ matching that pattern as a GitHub pre-release automatically.
 
 ## Questions
 
-Open a [discussion](https://github.com/Gorgias/terraform-provider-altinity/discussions)
+Open a [discussion](https://github.com/gorgias-oss/terraform-provider-altinity/discussions)
 or reach out via the issue tracker. We try to respond within a few business
 days.

@@ -1,7 +1,7 @@
 # terraform-provider-altinity
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Go Reference](https://pkg.go.dev/badge/github.com/Gorgias/terraform-provider-altinity.svg)](https://pkg.go.dev/github.com/Gorgias/terraform-provider-altinity)
+[![Go Reference](https://pkg.go.dev/badge/github.com/gorgias-oss/terraform-provider-altinity.svg)](https://pkg.go.dev/github.com/gorgias-oss/terraform-provider-altinity)
 
 Maintained by [Gorgias, Inc.](https://gorgias.com)
 
@@ -57,7 +57,7 @@ terraform {
 ### From source (development)
 
 ```sh
-git clone https://github.com/Gorgias/terraform-provider-altinity.git
+git clone https://github.com/gorgias-oss/terraform-provider-altinity.git
 cd terraform-provider-altinity
 make build
 cp examples/dev.tfrc.example examples/dev.tfrc   # edit the absolute path

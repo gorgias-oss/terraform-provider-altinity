@@ -22,7 +22,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
 )
 
 // tokenEnvVar is the environment-variable fallback for the API token.
