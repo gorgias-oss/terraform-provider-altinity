@@ -23,6 +23,14 @@ const PollInterval = 15 * time.Second
 // field; matching is case-insensitive over this small known set.
 // TODO(spike): confirm the cluster /cluster/{id}/status terminal strings and
 // the full error-status set from a successful cluster launch.
+//
+// Environments (altinity_environment Create poll, GET /environment/{id}.status):
+// a ready environment reports status "online" (live-confirmed 2026-06-09, env
+// 641), already covered by healthyStatuses below — so PollUntilHealthy works for
+// environments unchanged. TODO(spike): capture the in-flight provisioning string
+// and the terminal-error string from a real EnvironmentRequest and add the
+// error string to errorStatuses (until then a failed provision is bounded only
+// by the create timeout, which the resumable Create recovers from).
 var (
 	healthyStatuses = map[string]bool{
 		"ready":     true, // keeper terminal-healthy (spike-confirmed)

@@ -21,6 +21,17 @@ func TestPollUntilHealthy_ImmediateHealthy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestPollUntilHealthy_EnvironmentOnline pins the environment Create poll's
+// success signal: a ready Altinity.Cloud environment reports status "online"
+// (live-confirmed, env 641), which must be treated as terminal-healthy.
+func TestPollUntilHealthy_EnvironmentOnline(t *testing.T) {
+	ctx := context.Background()
+	err := PollUntilHealthy(ctx, func(context.Context) (string, error) {
+		return "online", nil
+	})
+	require.NoError(t, err)
+}
+
 func TestPollUntilHealthy_TerminalError(t *testing.T) {
 	ctx := context.Background()
 	err := PollUntilHealthy(ctx, func(context.Context) (string, error) {
