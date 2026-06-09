@@ -115,14 +115,15 @@ func TestProvider_RegistersAllResources(t *testing.T) {
 	p := New("dev")()
 	resFactories := p.Resources(context.Background())
 
-	// cluster, keeper, user, setting, profile, profile_setting.
-	require.Len(t, resFactories, 6)
+	// environment, cluster, keeper, user, setting, profile, profile_setting.
+	require.Len(t, resFactories, 7)
 
 	want := map[string]bool{
+		"altinity_environment":                false,
 		"altinity_clickhouse_cluster":         false,
 		"altinity_clickhouse_keeper":          false,
 		"altinity_clickhouse_user":            false,
-		"altinity_clickhouse_cluster_setting":         false,
+		"altinity_clickhouse_cluster_setting": false,
 		"altinity_clickhouse_profile":         false,
 		"altinity_clickhouse_profile_setting": false,
 	}

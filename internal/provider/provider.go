@@ -227,6 +227,7 @@ func (p *altinityProvider) DataSources(_ context.Context) []func() datasource.Da
 // Keep this list the single source of truth for resource wiring.
 func (p *altinityProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
+		NewEnvironmentResource,    // altinity_environment
 		NewClusterResource,        // altinity_clickhouse_cluster
 		NewKeeperResource,         // altinity_clickhouse_keeper
 		NewUserResource,           // altinity_clickhouse_user
