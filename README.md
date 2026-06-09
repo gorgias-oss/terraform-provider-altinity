@@ -382,3 +382,5 @@ or the live API before implementation.
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+=======
+Terraform provider for Altinity.
