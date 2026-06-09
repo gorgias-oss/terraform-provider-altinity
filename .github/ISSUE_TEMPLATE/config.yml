@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/Gorgias/terraform-provider-altinity/security/advisories/new
+    url: https://github.com/gorgias-oss/terraform-provider-altinity/security/advisories/new
     about: Report security issues privately. Do NOT file as a public issue. Or email security@gorgias.com directly.
   - name: Question / discussion
-    url: https://github.com/Gorgias/terraform-provider-altinity/discussions
+    url: https://github.com/gorgias-oss/terraform-provider-altinity/discussions
     about: Use Discussions for usage questions and design conversations.

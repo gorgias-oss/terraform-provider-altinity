@@ -7,7 +7,7 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm/wire"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
 )
 
 // Version is an available ClickHouse version offered for a cluster

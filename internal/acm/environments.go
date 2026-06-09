@@ -6,7 +6,7 @@ package acm
 import (
 	"context"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm/wire"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
 )
 
 // ListEnvironments returns all environments visible to the token

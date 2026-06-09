@@ -1,4 +1,4 @@
-module github.com/Gorgias/terraform-provider-altinity
+module github.com/gorgias-oss/terraform-provider-altinity
 
 go 1.26.4
 

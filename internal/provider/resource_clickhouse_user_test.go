@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
 )
 
 func newUserResource(t *testing.T, client *acm.Client) *userResource {

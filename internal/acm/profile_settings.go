@@ -7,7 +7,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm/wire"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
 )
 
 // ProfileSetting is the domain representation of a settings-profile entry

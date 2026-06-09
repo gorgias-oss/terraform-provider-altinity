@@ -13,7 +13,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/provider"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/provider"
 )
 
 // version is overridden at build time via -ldflags.
