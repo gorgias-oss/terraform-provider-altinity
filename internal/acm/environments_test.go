@@ -127,19 +127,6 @@ func TestEditEnvironment(t *testing.T) {
 	assert.Equal(t, "New Name", e.DisplayName)
 }
 
-func TestRemoveEnvironment_NotFoundIsClassified(t *testing.T) {
-	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodDelete, r.Method)
-		assert.Equal(t, "/environment/641", r.URL.Path)
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"Not found","code":404}`))
-	})
-
-	err := client.RemoveEnvironment(context.Background(), 641)
-	require.Error(t, err)
-	assert.True(t, IsNotFound(err))
-}
-
 func TestListNodeTypes_DecodesFixture(t *testing.T) {
 	var gotPath string
 	client := serveFixtureClient(t, "testdata/nodetypes.json", &gotPath)

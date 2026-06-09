@@ -52,7 +52,6 @@ var allowlistForGuard = []string{
 	"EnvironmentRequest",
 	"EnvironmentShow",
 	"EnvironmentEdit",
-	"EnvironmentRemove",
 	"CloudOptionsGlobal",
 }
 

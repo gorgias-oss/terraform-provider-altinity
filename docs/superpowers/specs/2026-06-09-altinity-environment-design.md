@@ -66,10 +66,13 @@ environment goes through the *request* flow.
 | Create (request) | `POST /environments/request` | `EnvironmentRequest` | No → add |
 | Read | `GET /environment/{id}` | `EnvironmentShow` | No → add |
 | Update | `POST /environment/{id}` | `EnvironmentEdit` | No → add |
-| Delete | `DELETE /environment/{id}` | `EnvironmentRemove` | No → add |
 | Adopt-by-name / resume | `GET /environments` | `EnvironmentList` | Yes |
-| Delete pre-flight (cluster check) | `GET /environment/{environment}/clusters` | `ClusterList` | Yes |
 | Regions data source | `GET /cloud/options` | `CloudOptionsGlobal` | No → add |
+
+> **No delete op.** `EnvironmentRemove` (`DELETE /environment/{id}`) is
+> deliberately NOT allowlisted: environment deletion needs an out-of-band email +
+> MFA confirmation that cannot be automated (see the "Delete — NOT automated"
+> section). `terraform destroy` removes the resource from state and warns.
 
 `EnvironmentRequest` request body (from `reference.json`): `name`,
 `cloud_provider`, `aws_region`, `gcp_region`, `azure_region`, `hcloud_region`,
@@ -299,12 +302,12 @@ destroy-with-warning).
 ## 8. Implementation outline (for the plan phase)
 
 1. **specgen allowlist** — add `EnvironmentRequest`, `EnvironmentShow`,
-   `EnvironmentEdit`, `EnvironmentRemove`, `CloudOptionsGlobal` to `allowedOps`;
-   confirm `Environment` schema already in `allowedSchemas`. Run
-   `go generate ./...`; keep `codegen_guard_test` green.
+   `EnvironmentEdit`, `CloudOptionsGlobal` to `allowedOps` (NO `EnvironmentRemove`
+   — delete is not automated); confirm `Environment` schema already in
+   `allowedSchemas`. Run `go generate ./...`; keep `codegen_guard_test` green.
 2. **ACM client** — extend `environments.go`: `RequestEnvironment`,
-   `GetEnvironmentByID`, `EditEnvironment`, `RemoveEnvironment`; add
-   `ListCloudOptionsGlobal` to `cloud.go`. Domain `Environment` already exists.
+   `GetEnvironmentByID`, `EditEnvironment`; add `ListCloudOptionsGlobal` to
+   `cloud.go`. Domain `Environment` already exists.
 3. **Provider** — `resource_environment.go` (`altinity_environment`),
    `data_source_regions.go` (`altinity_regions`); register `NewEnvironmentResource`
    and `NewRegionsDataSource` in `provider.go` (§ lines 204–236).
