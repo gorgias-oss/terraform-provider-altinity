@@ -106,9 +106,11 @@ func TestEnvironmentResource_CreateFresh(t *testing.T) {
 	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
 
 	assert.True(t, requested, "must call EnvironmentRequest on a fresh create")
-	// region routed to the matching provider field.
-	assert.Equal(t, "gcp", reqBody["cloud_provider"])
+	// cloud_provider is upper-cased on the wire; region routed to the matching field.
+	assert.Equal(t, "GCP", reqBody["cloud_provider"])
 	assert.Equal(t, "us-east1", reqBody["gcp_region"])
+	_, hasAWS := reqBody["aws_region"]
+	assert.False(t, hasAWS, "non-matching region fields must be omitted")
 
 	var out environmentResourceModel
 	require.False(t, resp.State.Get(ctx, &out).HasError())
@@ -191,20 +193,13 @@ func TestEnvironmentResource_CreatePollTimeoutLeavesNoState(t *testing.T) {
 	assert.True(t, resp.State.Raw.IsNull(), "state must not be set on poll timeout (resumability)")
 }
 
-// TestEnvironmentResource_DeleteRefusedWithClusters: the no-cascade guard.
-func TestEnvironmentResource_DeleteRefusedWithClusters(t *testing.T) {
-	removed := false
+// TestEnvironmentResource_DeleteWarnsAndMakesNoAPICall: environment deletion is
+// not automated (it needs an out-of-band email + MFA confirmation), so Delete
+// must NOT call the API — it returns a warning and lets the framework drop the
+// resource from state.
+func TestEnvironmentResource_DeleteWarnsAndMakesNoAPICall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/clusters") && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"data":[{"id":"1","name":"foo"},{"id":"2","name":"bar"}]}`))
-		case r.Method == http.MethodDelete:
-			removed = true
-			_, _ = w.Write([]byte(`{"data":true}`))
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
+		t.Fatalf("Delete must not call the ACM API; got %s %s", r.Method, r.URL.Path)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -218,43 +213,9 @@ func TestEnvironmentResource_DeleteRefusedWithClusters(t *testing.T) {
 	resp := resource.DeleteResponse{State: newEnvState(t, s, state)}
 	r.Delete(ctx, req, &resp)
 
-	require.True(t, resp.Diagnostics.HasError(), "delete must be refused with clusters present")
-	assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "not empty")
-	assert.False(t, removed, "RemoveEnvironment must NOT be called when clusters remain")
-}
-
-// TestEnvironmentResource_DeleteEmpty: no clusters -> remove -> poll gone.
-func TestEnvironmentResource_DeleteEmpty(t *testing.T) {
-	removed := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/clusters") && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"data":[]}`))
-		case strings.HasPrefix(r.URL.Path, "/environment/") && r.Method == http.MethodDelete:
-			removed = true
-			_, _ = w.Write([]byte(`{"data":true}`))
-		case r.URL.Path == "/environments" && r.Method == http.MethodGet:
-			// gone immediately
-			_, _ = w.Write([]byte(`{"data":[]}`))
-		default:
-			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	r := &environmentResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
-	s := environmentSchema(t)
-	ctx := context.Background()
-
-	state := freshEnvPlan()
-	state.ID = types.StringValue("700")
-	req := resource.DeleteRequest{State: newEnvState(t, s, state)}
-	resp := resource.DeleteResponse{State: newEnvState(t, s, state)}
-	r.Delete(ctx, req, &resp)
-
-	require.False(t, resp.Diagnostics.HasError(), "delete diags: %v", resp.Diagnostics)
-	assert.True(t, removed, "RemoveEnvironment must be called when empty")
+	require.False(t, resp.Diagnostics.HasError(), "delete must not error: %v", resp.Diagnostics)
+	require.Equal(t, 1, resp.Diagnostics.WarningsCount(), "delete must warn that the env is not deleted")
+	assert.Contains(t, resp.Diagnostics.Warnings()[0].Summary(), "not deleted")
 }
 
 // TestEnvironmentResource_ReadDriftRemovesState: a 404 on read drops the resource.
