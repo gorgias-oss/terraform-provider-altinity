@@ -221,8 +221,9 @@ func (r *clusterResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manage an Altinity.Cloud ClickHouse cluster (launch / rescale / upgrade / backup / terminate). " +
-			"Does NOT manage settings, profiles or users — use the satellite resources for those (design §5).",
+		Description: "Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). " +
+			"This resource does not manage ClickHouse settings, profiles, or users — use the " +
+			"`altinity_clickhouse_setting`, `altinity_clickhouse_profile`, and `altinity_clickhouse_user` resources for those.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -339,7 +340,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				// forces a spurious cluster replacement on any later change. Leaving
 				// it unset keeps a stable null; setting it still forces replace.
 				Optional:    true,
-				Description: "Volume type. Changing this forces replacement (TODO(spike): confirm in-place path).",
+				Description: "Volume type. Changing this forces replacement of the cluster.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -436,7 +437,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(true),
-				Description: "Enable TLS (default true). Changing this forces replacement (TODO(spike): confirm in-place path).",
+				Description: "Enable TLS (default `true`). Changing this forces replacement of the cluster.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.RequiresReplace(),
 					boolplanmodifier.UseStateForUnknown(),
@@ -503,7 +504,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional:    true,
 				Computed:    true,
 				Default:     stringdefault.StaticString("ingress"),
-				Description: "Load balancer type (default \"ingress\"). Changing this forces replacement (TODO(spike): confirm in-place path).",
+				Description: "Load balancer type (default `\"ingress\"`). Changing this forces replacement of the cluster.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
@@ -512,7 +513,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"ip_whitelist": schema.StringAttribute{
 				// Optional-only (NOT Computed): not read back by ACM — see volume_type.
 				Optional:    true,
-				Description: "IP allow-list (comma-separated CIDRs). TODO(spike): confirm the in-place update endpoint; conservatively RequiresReplace until then.",
+				Description: "IP allow-list (comma-separated CIDRs). Changing this forces replacement of the cluster.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -560,7 +561,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"uptime": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Uptime schedule selector. TODO(spike): confirm the in-place update endpoint; conservatively RequiresReplace until then (design §7.2).",
+				Description: "Uptime schedule selector. Changing this forces replacement of the cluster.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
@@ -626,10 +627,9 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			// ---- opaque nested blocks (TODO(spike) raw passthrough) ----
 			"datadog": schema.StringAttribute{
 				Optional: true,
-				Description: "TODO(spike): Datadog integration settings (datadogSettings). Currently a raw JSON-string passthrough; " +
-					"replace with a strongly-typed nested block once the spike captures the shape (design §6). " +
-					"Contains the Datadog API key when set, hence Sensitive. " +
-					"Conservatively RequiresReplace until the in-place update endpoint is confirmed (design §7.2).",
+				Description: "Datadog integration settings (`datadogSettings`), supplied as a raw JSON string. " +
+					"Sensitive because it contains the Datadog API key when set. " +
+					"Changing this forces replacement of the cluster.",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
 				PlanModifiers: []planmodifier.String{
@@ -638,19 +638,16 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"backup_options": schema.StringAttribute{
 				Optional: true,
-				Description: "TODO(spike): backup schedule configuration (backupOptions). Currently a raw JSON-string passthrough; " +
-					"replace with a strongly-typed nested block once the spike captures the shape (design §6). " +
-					"Marked Sensitive because the opaque blob may carry credentials (e.g. object-storage keys).",
+				Description: "Backup schedule configuration (`backupOptions`), supplied as a raw JSON string. " +
+					"Sensitive because it may carry credentials (e.g. object-storage keys).",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
 			},
 			"uptime_settings": schema.StringAttribute{
 				Optional: true,
-				Description: "TODO(spike): uptime window settings (uptimeSettings). Raw JSON passthrough — " +
-					"replace with a strongly-typed nested block once the spike captures the shape (design §6). " +
-					"WARNING: any change to this attribute forces cluster replacement (RequiresReplace). " +
-					"Remove RequiresReplace only after confirming the ACM in-place update endpoint (design §7.2). " +
-					"Marked Sensitive because the opaque blob's shape is unspecified and may carry secrets.",
+				Description: "Uptime window settings (`uptimeSettings`), supplied as a raw JSON string. " +
+					"Sensitive because it may carry secrets. " +
+					"Changing this forces replacement of the cluster.",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
 				PlanModifiers: []planmodifier.String{
@@ -659,10 +656,9 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 			"alternate_endpoints": schema.StringAttribute{
 				Optional: true,
-				Description: "TODO(spike): alternate endpoints (alternateEndpoints). Currently a raw JSON-string passthrough; " +
-					"replace with a strongly-typed nested block once the spike captures the shape (design §6). " +
-					"Conservatively RequiresReplace until the in-place update endpoint is confirmed (design §7.2). " +
-					"Marked Sensitive because the opaque blob's shape is unspecified and may carry credentials.",
+				Description: "Alternate endpoints (`alternateEndpoints`), supplied as a raw JSON string. " +
+					"Sensitive because it may carry credentials. " +
+					"Changing this forces replacement of the cluster.",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
 				PlanModifiers: []planmodifier.String{

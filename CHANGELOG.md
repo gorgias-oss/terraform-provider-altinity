@@ -4,6 +4,29 @@ All notable changes to this provider will be documented in this file. The
 format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the provider follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] — 2026-06-09
+
+Documentation release — no functional provider changes.
+
+### Added
+
+- Terraform Registry documentation under `docs/` (provider index, all
+  resources and data sources), generated from the provider schema and the
+  `examples/` tree with `tfplugindocs`. The Registry now renders full docs
+  for the provider instead of "no documentation".
+- `scripts/gen-docs.sh` and a working `make docs` target. Because the
+  `main` package lives in `cmd/`, a bare `tfplugindocs generate` cannot
+  build the provider; the script builds it, exports the schema via
+  Terraform, and renders docs with `--providers-schema`.
+
+### Changed
+
+- Reworded several `altinity_clickhouse_cluster` attribute descriptions
+  (`datadog`, `backup_options`, `uptime_settings`, `alternate_endpoints`,
+  `volume_type`, `secure`, `lb_type`, `ip_whitelist`, `uptime`) to drop
+  internal engineering notes that previously surfaced in `terraform plan`
+  output and the Registry. Behavior is unchanged.
+
 ## [0.1.0] — TBD
 
 Initial release.
