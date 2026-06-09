@@ -85,8 +85,9 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"fails WITHOUT recording state, and a subsequent apply adopts the still-provisioning " +
 			"environment by name and resumes waiting — it is never destroyed and re-requested. " +
 			"As a consequence, an unmanaged environment with the same `name` would be adopted.\n\n" +
-			"Delete is GUARDED: destroying an environment that still contains clusters is refused; " +
-			"the provider never deletes clusters on your behalf.",
+			"Destroy does NOT delete the environment in Altinity.Cloud: environment deletion requires " +
+			"an out-of-band email + MFA confirmation that cannot be automated, so `terraform destroy` " +
+			"removes the resource from state and warns — delete the environment manually in the ACM UI.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -192,16 +193,23 @@ func (r *environmentResource) Configure(_ context.Context, req resource.Configur
 }
 
 // buildEnvRequest maps the model's cloud_provider + region onto the
-// EnvironmentRequest, placing the region in the provider-matching field. ACM
-// rejects the request (HTTP 400 "fields invalid: cloud_provider") if the region
-// is placed in a non-matching field, so the mapping must be exact.
+// EnvironmentRequest. Two ACM quirks are handled here (both live-confirmed
+// 2026-06-09 against the ACM UI's request-environment call):
+//
+//   - cloud_provider must be UPPERCASE on this endpoint ("GCP", not "gcp") — even
+//     though the altinity_regions endpoint accepts the lowercase form. The schema
+//     keeps the operator-facing value lowercase (consistent with altinity_regions)
+//     and we upper-case it on the wire. ToUpper("gcp")="GCP" etc.
+//   - the region must be placed in the field MATCHING cloud_provider; a region in
+//     a non-matching field is rejected with HTTP 400 "fields invalid: cloud_provider".
 func (r *environmentResource) buildEnvRequest(m environmentResourceModel) acm.EnvironmentRequest {
+	provider := m.CloudProvider.ValueString()
 	req := acm.EnvironmentRequest{
 		Name:          m.Name.ValueString(),
-		CloudProvider: m.CloudProvider.ValueString(),
+		CloudProvider: strings.ToUpper(provider),
 	}
 	region := m.Region.ValueString()
-	switch m.CloudProvider.ValueString() {
+	switch provider {
 	case "aws":
 		req.AWSRegion = region
 	case "gcp":
@@ -392,68 +400,24 @@ func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteReq
 		return
 	}
 
-	to, diags := resolveTimeoutsWithDefaults(ctx, state.Timeouts, envTimeoutDefaults())
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	id, err := parseACMID("id", state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid environment id in state", err.Error())
-		return
-	}
-	idStr := strconv.FormatInt(id, 10)
-
-	// Guard: no cascade. Refuse to delete an environment that still holds
-	// clusters. A 404/403 means the environment (the list's parent) is already
-	// gone — treat as empty. Any other error blocks the delete.
-	clusters, lerr := r.client.ListClusters(ctx, idStr)
-	if lerr != nil && !acm.IsNotFound(lerr) && !acm.IsForbidden(lerr) {
-		resp.Diagnostics.AddError("Failed to check environment clusters before delete", lerr.Error())
-		return
-	}
-	if len(clusters) > 0 {
-		names := make([]string, 0, len(clusters))
-		for _, c := range clusters {
-			names = append(names, c.Name)
-		}
-		resp.Diagnostics.AddError(
-			"Environment is not empty",
-			fmt.Sprintf("Environment %q (id %d) still contains %d cluster(s) [%s]; destroy them "+
-				"before destroying the environment. This provider never deletes clusters on your behalf.",
-				state.Name.ValueString(), id, len(clusters), strings.Join(names, ", ")),
-		)
-		return
-	}
-
-	if err := r.client.RemoveEnvironment(ctx, id); err != nil {
-		if acm.IsNotFound(err) {
-			return
-		}
-		resp.Diagnostics.AddError("Failed to delete environment", err.Error())
-		return
-	}
-
-	// Poll until gone via the list (absence == gone). A per-id GET of a deleted
-	// environment may return 403 rather than 404 (as clusters do), so a list-based
-	// existence check is unambiguous.
-	pollCtx, cancel := context.WithTimeout(ctx, to.delete)
-	defer cancel()
-	if err := acm.PollUntilGoneBy(pollCtx, func(c context.Context) (bool, error) {
-		envs, gerr := r.client.ListEnvironments(c)
-		if gerr != nil {
-			return false, gerr
-		}
-		for _, e := range envs {
-			if e.ID == id {
-				return true, nil
-			}
-		}
-		return false, nil
-	}); err != nil {
-		resp.Diagnostics.AddError("Environment did not terminate", err.Error())
-	}
+	// Environment deletion is intentionally NOT automated. Live-confirmed
+	// (2026-06-09): DELETE /environment/{id} does not delete synchronously — it
+	// triggers an out-of-band email with an MFA confirmation link (op=deleteEnv)
+	// that a human must click to actually tear the environment down. Terraform
+	// cannot complete that flow, so `terraform destroy` removes the resource from
+	// state and warns rather than issuing a delete that would never take effect.
+	//
+	// The framework removes the resource from state when Delete returns without
+	// an error; we add a warning so the operator knows the environment still
+	// exists in ACM and must be deleted manually.
+	resp.Diagnostics.AddWarning(
+		"Environment not deleted in Altinity.Cloud",
+		fmt.Sprintf("Environment %q (id %s) was removed from Terraform state but NOT deleted in "+
+			"Altinity.Cloud. Environment deletion requires an email + MFA confirmation that cannot be "+
+			"automated by the provider. If you no longer need it, delete it manually in the ACM UI "+
+			"(Environments → %s → Delete) and approve the emailed confirmation link.",
+			state.Name.ValueString(), state.ID.ValueString(), state.Name.ValueString()),
+	)
 }
 
 // ImportState imports by the ACM environment id.

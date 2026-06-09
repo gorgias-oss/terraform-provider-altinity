@@ -5,7 +5,7 @@ subcategory: ""
 description: |-
   An Altinity.Cloud environment — the region-scoped unit that ClickHouse clusters are launched into. Created via the Altinity-hosted request flow (POST /environments/request) and polled until ready.
   Create is RESUMABLE: if the readiness poll exceeds the create timeout, the apply fails WITHOUT recording state, and a subsequent apply adopts the still-provisioning environment by name and resumes waiting — it is never destroyed and re-requested. As a consequence, an unmanaged environment with the same name would be adopted.
-  Delete is GUARDED: destroying an environment that still contains clusters is refused; the provider never deletes clusters on your behalf.
+  Destroy does NOT delete the environment in Altinity.Cloud: environment deletion requires an out-of-band email + MFA confirmation that cannot be automated, so terraform destroy removes the resource from state and warns — delete the environment manually in the ACM UI.
 ---
 
 # altinity_environment (Resource)
@@ -14,7 +14,7 @@ An Altinity.Cloud environment — the region-scoped unit that ClickHouse cluster
 
 Create is RESUMABLE: if the readiness poll exceeds the create timeout, the apply fails WITHOUT recording state, and a subsequent apply adopts the still-provisioning environment by name and resumes waiting — it is never destroyed and re-requested. As a consequence, an unmanaged environment with the same `name` would be adopted.
 
-Delete is GUARDED: destroying an environment that still contains clusters is refused; the provider never deletes clusters on your behalf.
+Destroy does NOT delete the environment in Altinity.Cloud: environment deletion requires an out-of-band email + MFA confirmation that cannot be automated, so `terraform destroy` removes the resource from state and warns — delete the environment manually in the ACM UI.
 
 ## Example Usage
 
@@ -27,8 +27,9 @@ Delete is GUARDED: destroying an environment that still contains clusters is ref
 # without recording state and a subsequent apply adopts the still-provisioning
 # environment by name and resumes waiting — it is never destroyed and re-created.
 #
-# Guarded delete: destroying an environment that still contains clusters is
-# refused. Destroy the clusters first.
+# Destroy does NOT delete the environment in Altinity.Cloud — deletion requires
+# an email + MFA confirmation that cannot be automated. `terraform destroy`
+# removes the resource from state and warns; delete it manually in the ACM UI.
 
 # Discover the valid region codes for the chosen provider.
 data "altinity_regions" "gcp" {
@@ -36,7 +37,7 @@ data "altinity_regions" "gcp" {
 }
 
 resource "altinity_environment" "example" {
-  name           = "tf-demo-env"
+  name           = "gorgias-tf-demo-env"
   cloud_provider = "gcp"
   region         = "us-east1" # or e.g. data.altinity_regions.gcp.regions[0].code
   display_name   = "Terraform Demo"

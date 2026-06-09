@@ -25,12 +25,14 @@ const PollInterval = 15 * time.Second
 // the full error-status set from a successful cluster launch.
 //
 // Environments (altinity_environment Create poll, GET /environment/{id}.status):
-// a ready environment reports status "online" (live-confirmed 2026-06-09, env
-// 641), already covered by healthyStatuses below — so PollUntilHealthy works for
-// environments unchanged. TODO(spike): capture the in-flight provisioning string
-// and the terminal-error string from a real EnvironmentRequest and add the
-// error string to errorStatuses (until then a failed provision is bounded only
-// by the create timeout, which the resumable Create recovers from).
+// live-confirmed 2026-06-09 against a real EnvironmentRequest (env 2292), the
+// top-level status transitions "pending" -> "online" over ~24 min. "online" is
+// terminal-healthy (already in healthyStatuses) and "pending" is non-terminal
+// (absent from both sets, so the poll keeps waiting) — PollUntilHealthy works
+// for environments unchanged. No terminal-error status was observed; transient
+// provisioning failures surface under statusInfo.reconciler while the top-level
+// status stays "pending", and a stuck provision is bounded by the create
+// timeout, which the resumable Create recovers from on the next apply.
 var (
 	healthyStatuses = map[string]bool{
 		"ready":     true, // keeper terminal-healthy (spike-confirmed)

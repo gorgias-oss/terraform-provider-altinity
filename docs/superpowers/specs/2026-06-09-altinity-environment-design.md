@@ -249,40 +249,52 @@ Captured payloads become `testdata/*.json` fixtures (matching
 Capture results recorded 2026-06-09 (fixtures under `internal/acm/testdata/`).
 
 - **OQ-1** Does `EnvironmentRequest` return the new environment id in its
-  response? — **STILL OPEN.** The OpenAPI response schema is empty (`{}`), and no
-  successful create has been captured yet (see OQ-4). The design already handles
-  both cases via the adopt-by-name id-resolution fallback, so this does not block
-  implementation; confirm from the first successful create.
-- **OQ-2** What does the `first` field do? — **STILL OPEN.** Undocumented; omitted
-  by default. Confirm from a successful create.
+  response? — **RESOLVED: yes.** The create response is `{"data":{"id":"2292",…},"approval":false}`
+  (live-confirmed 2026-06-09). Create uses the returned id; the adopt-by-name
+  fallback remains for the id=0 / resume cases.
+- **OQ-2** What does the `first` field do? — **RESOLVED: omit it.** The ACM UI's
+  request-environment call sends only `{name, cloud_provider, <provider>_region}`
+  with no `first` field, and the create succeeds. The provider omits it.
 - **OQ-3** Region option endpoint — **RESOLVED.** `GET /cloud/options?type=regions&provider=<aws|gcp|…>`.
   Keyed on **`provider`** (not `platform`); `type` is **`regions`** (plural).
   Response: `{"data":[{"id","name","code"}], "metadata":{"default":"<code>"}}`
   where `id == code`. The existing `{code,name}` decode works as-is; `metadata.default`
   is a bonus we may surface as a computed `default_region` on the data source.
   Fixtures: `cloud_options_regions_aws.json`, `cloud_options_regions_gcp.json`.
-- **OQ-4** Accepted `cloud_provider` value / required fields — **PARTIALLY OPEN.**
-  A create with `{cloud_provider:"gcp", aws_region:"us-east1"}` (region in the
-  WRONG field) was rejected: `{"error":"One or more fields invalid: cloud_provider","code":400}`.
-  Working hypothesis: ACM validates that the region field MATCHING `cloud_provider`
-  is populated, and flags `cloud_provider` when it isn't. Retry pending with the
-  region in the matching field (`gcp_region`). If still rejected, the accepted
-  enum differs from `gcp` and must be discovered via `GET /cloud/options?type=<clouds|providers|…>`.
-- **OQ-5** Environment status strings — **RESOLVED (healthy).** A ready/online
-  environment reports `status:"online"`, `state:null` (fixture
-  `environment_show.json`, env id 641). `"online"` is **already** in `poll.go`'s
-  `healthyStatuses`, so no new healthy-status code is required. The provisioning
-  and terminal-error strings are still to be observed from a real create
-  (folds into OQ-4's retry). Field mapping confirmed against `environmentFromWire`
-  (id, name, normalizedName, displayName, type, domain, status, state, id_owner,
-  id_parent, plus `created`/`hostedByAltinity` available if promoted).
+- **OQ-4** Accepted `cloud_provider` value / required fields — **RESOLVED:
+  UPPERCASE.** The request endpoint wants the provider token in upper case —
+  `{"name":…,"cloud_provider":"GCP","gcp_region":"us-east1"}` succeeds, while
+  `"gcp"` is rejected. (The `altinity_regions` endpoint, by contrast, accepts the
+  lowercase `provider=gcp` — a genuine vocabulary mismatch between endpoints.)
+  Resolution: the schema keeps the operator-facing value lowercase (consistent
+  with `altinity_regions`) and `buildEnvRequest` upper-cases it on the wire via
+  `strings.ToUpper`. Only `name` + `cloud_provider` + the matching `<provider>_region`
+  are required; no org/billing context. (GCP/AWS confirmed; AZURE/HCLOUD inferred
+  from the same ToUpper rule.)
+- **OQ-5** Environment status strings — **RESOLVED.** A real create (env 2292)
+  transitions top-level `status` `"pending"` → `"online"` over ~24 min.
+  `"online"` is terminal-healthy (already in `healthyStatuses`); `"pending"` is
+  non-terminal (absent from both sets → poll keeps waiting). No terminal-error
+  status was observed — transient provisioning failures appear under
+  `statusInfo.reconciler` while top-level `status` stays `"pending"`, so a stuck
+  provision is bounded by the create timeout (which resumable Create recovers
+  from). The 45m create default comfortably covers the observed ~24 min.
 
-**Status:** OQ-3 and the healthy half of OQ-5 are resolved and unblock the
-`altinity_regions` data source + the create poll's success path immediately.
-OQ-1/OQ-2/OQ-4 and the error-status half of OQ-5 depend on one successful
-`EnvironmentRequest` (retry with matching region field in flight). None block
-Tasks 1–7 of the plan; they gate finalizing Task 8's request-body mapping and
-Task 4's error-status set.
+### Delete — NOT automated (live finding 2026-06-09)
+
+`DELETE /environment/{id}?skipKube=0&skipCloud=0&clusters=0` does **not** delete
+synchronously: it triggers an out-of-band **email with an MFA confirmation link**
+(`op=deleteEnv`) that a human must click to actually tear the environment down.
+Terraform cannot complete that flow. **Decision (operator-confirmed): skip
+environment deletion.** `terraform destroy` removes the resource from state and
+emits a Warning telling the operator to delete the environment manually in the
+ACM UI. The earlier "guarded no-cascade delete" design is superseded by this
+finding; `RemoveEnvironment` remains in the ACM client (tested) for when/if the
+confirmation flow becomes automatable.
+
+**Status:** all open questions RESOLVED. Implementation updated accordingly
+(uppercase `cloud_provider`, id from response, pending→online poll, non-deleting
+destroy-with-warning).
 
 ## 8. Implementation outline (for the plan phase)
 
