@@ -107,6 +107,15 @@ var allowedOps = []string{
 	"EnvironmentList", // GET /environments
 	"NodeTypeList",    // GET /environment/{environment}/nodetypes
 	"CloudOptions",    // GET /cloud/{environment}/options (type=versions, ...)
+	// Environment lifecycle (altinity_environment resource).
+	"EnvironmentRequest", // POST   /environments/request
+	"EnvironmentShow",    // GET    /environment/{id}
+	"EnvironmentEdit",    // POST   /environment/{id}
+	"EnvironmentRemove",  // DELETE /environment/{id}
+	// Global cloud options (altinity_regions data source). The non-env-scoped
+	// variant of CloudOptions: region discovery happens before any environment
+	// exists, so it cannot use the {environment}-scoped endpoint.
+	"CloudOptionsGlobal", // GET    /cloud/options
 }
 
 // allowedSchemas is the set of named components.schemas we emit faithful wire
