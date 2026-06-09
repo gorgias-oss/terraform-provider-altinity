@@ -1,0 +1,182 @@
+{
+  "data": [
+    {
+      "id": "asia-east1",
+      "name": "Changhua County, Taiwan, APAC",
+      "code": "asia-east1"
+    },
+    {
+      "id": "asia-east2",
+      "name": "Hong Kong, APAC",
+      "code": "asia-east2"
+    },
+    {
+      "id": "asia-northeast1",
+      "name": "Tokyo, Japan, APAC",
+      "code": "asia-northeast1"
+    },
+    {
+      "id": "asia-northeast2",
+      "name": "Osaka, Japan, APAC",
+      "code": "asia-northeast2"
+    },
+    {
+      "id": "asia-northeast3",
+      "name": "Seoul, South Korea, APAC",
+      "code": "asia-northeast3"
+    },
+    {
+      "id": "asia-south1",
+      "name": "Mumbai, India APAC",
+      "code": "asia-south1"
+    },
+    {
+      "id": "asia-south2",
+      "name": "Delhi, India APAC",
+      "code": "asia-south2"
+    },
+    {
+      "id": "asia-southeast1",
+      "name": "Jurong West, Singapore, APAC",
+      "code": "asia-southeast1"
+    },
+    {
+      "id": "asia-southeast2",
+      "name": "Jakarta, Indonesia, APAC",
+      "code": "asia-southeast2"
+    },
+    {
+      "id": "australia-southeast1",
+      "name": "Sydney, Australia, APAC",
+      "code": "australia-southeast1"
+    },
+    {
+      "id": "australia-southeast2",
+      "name": "Melbourne, Australia, APAC",
+      "code": "australia-southeast2"
+    },
+    {
+      "id": "europe-central2",
+      "name": "Warsaw, Poland, Europe",
+      "code": "europe-central2"
+    },
+    {
+      "id": "europe-north1",
+      "name": "Hamina, Finland, Europe",
+      "code": "europe-north1"
+    },
+    {
+      "id": "europe-southwest1",
+      "name": "Madrid, Spain, Europe",
+      "code": "europe-southwest1"
+    },
+    {
+      "id": "europe-west1",
+      "name": "St. Ghislain, Belgium, Europe",
+      "code": "europe-west1"
+    },
+    {
+      "id": "europe-west2",
+      "name": "London, England, Europe",
+      "code": "europe-west2"
+    },
+    {
+      "id": "europe-west3",
+      "name": "Frankfurt, Germany Europe",
+      "code": "europe-west3"
+    },
+    {
+      "id": "europe-west4",
+      "name": "Eemshaven, Netherlands, Europe",
+      "code": "europe-west4"
+    },
+    {
+      "id": "europe-west6",
+      "name": "Zurich, Switzerland, Europe",
+      "code": "europe-west6"
+    },
+    {
+      "id": "europe-west8",
+      "name": "Milan, Italy, Europe",
+      "code": "europe-west8"
+    },
+    {
+      "id": "europe-west9",
+      "name": "Paris, France, Europe",
+      "code": "europe-west9"
+    },
+    {
+      "id": "me-west1",
+      "name": "Tel Aviv, Israel, Middle East",
+      "code": "me-west1"
+    },
+    {
+      "id": "northamerica-northeast1",
+      "name": "Montréal, Québec, North America",
+      "code": "northamerica-northeast1"
+    },
+    {
+      "id": "northamerica-northeast2",
+      "name": "Toronto, Ontario, North America",
+      "code": "northamerica-northeast2"
+    },
+    {
+      "id": "southamerica-east1",
+      "name": "Osasco, São Paulo, Brazil, South America",
+      "code": "southamerica-east1"
+    },
+    {
+      "id": "southamerica-west1",
+      "name": "Santiago, Chile, South America",
+      "code": "southamerica-west1"
+    },
+    {
+      "id": "us-central1",
+      "name": "Council Bluffs, Iowa, North America",
+      "code": "us-central1"
+    },
+    {
+      "id": "us-east1",
+      "name": "Moncks Corner, South Carolina, North America",
+      "code": "us-east1"
+    },
+    {
+      "id": "us-east4",
+      "name": "Ashburn, Virginia, North America",
+      "code": "us-east4"
+    },
+    {
+      "id": "us-east5",
+      "name": "Columbus, Ohio, North America",
+      "code": "us-east5"
+    },
+    {
+      "id": "us-south1",
+      "name": "Dallas, Texas, North America",
+      "code": "us-south1"
+    },
+    {
+      "id": "us-west1",
+      "name": "The Dalles, Oregon, North America",
+      "code": "us-west1"
+    },
+    {
+      "id": "us-west2",
+      "name": "Los Angeles, California, North America",
+      "code": "us-west2"
+    },
+    {
+      "id": "us-west3",
+      "name": "Salt Lake City, Utah, North America",
+      "code": "us-west3"
+    },
+    {
+      "id": "us-west4",
+      "name": "Las Vegas, Nevada, North America",
+      "code": "us-west4"
+    }
+  ],
+  "metadata": {
+    "default": "asia-east1"
+  }
+}

@@ -246,20 +246,43 @@ Captured payloads become `testdata/*.json` fixtures (matching
 
 ## 7. Open questions
 
-- **OQ-1** Does `EnvironmentRequest` return the new environment id in its
-  response, or must Create resolve it via adopt-by-name? (Resolved by capture 3;
-  design works either way.)
-- **OQ-2** What does the `first` field do? Default behavior if omitted?
-- **OQ-3** Exact `type` value (`regions` vs `region`) and `provider` vs
-  `platform` keying for `CloudOptionsGlobal`.
-- **OQ-4** Does `EnvironmentRequest` require org/billing context beyond
-  name+provider+region?
-- **OQ-5** Environment terminal-healthy and terminal-error status strings
-  (feeds §4.6).
+Capture results recorded 2026-06-09 (fixtures under `internal/acm/testdata/`).
 
-None block writing the implementation plan; all are resolved by the §6 captures
-before the affected code is finalized, and the design degrades gracefully
-(capture-driven status, adopt-by-name id resolution).
+- **OQ-1** Does `EnvironmentRequest` return the new environment id in its
+  response? — **STILL OPEN.** The OpenAPI response schema is empty (`{}`), and no
+  successful create has been captured yet (see OQ-4). The design already handles
+  both cases via the adopt-by-name id-resolution fallback, so this does not block
+  implementation; confirm from the first successful create.
+- **OQ-2** What does the `first` field do? — **STILL OPEN.** Undocumented; omitted
+  by default. Confirm from a successful create.
+- **OQ-3** Region option endpoint — **RESOLVED.** `GET /cloud/options?type=regions&provider=<aws|gcp|…>`.
+  Keyed on **`provider`** (not `platform`); `type` is **`regions`** (plural).
+  Response: `{"data":[{"id","name","code"}], "metadata":{"default":"<code>"}}`
+  where `id == code`. The existing `{code,name}` decode works as-is; `metadata.default`
+  is a bonus we may surface as a computed `default_region` on the data source.
+  Fixtures: `cloud_options_regions_aws.json`, `cloud_options_regions_gcp.json`.
+- **OQ-4** Accepted `cloud_provider` value / required fields — **PARTIALLY OPEN.**
+  A create with `{cloud_provider:"gcp", aws_region:"us-east1"}` (region in the
+  WRONG field) was rejected: `{"error":"One or more fields invalid: cloud_provider","code":400}`.
+  Working hypothesis: ACM validates that the region field MATCHING `cloud_provider`
+  is populated, and flags `cloud_provider` when it isn't. Retry pending with the
+  region in the matching field (`gcp_region`). If still rejected, the accepted
+  enum differs from `gcp` and must be discovered via `GET /cloud/options?type=<clouds|providers|…>`.
+- **OQ-5** Environment status strings — **RESOLVED (healthy).** A ready/online
+  environment reports `status:"online"`, `state:null` (fixture
+  `environment_show.json`, env id 641). `"online"` is **already** in `poll.go`'s
+  `healthyStatuses`, so no new healthy-status code is required. The provisioning
+  and terminal-error strings are still to be observed from a real create
+  (folds into OQ-4's retry). Field mapping confirmed against `environmentFromWire`
+  (id, name, normalizedName, displayName, type, domain, status, state, id_owner,
+  id_parent, plus `created`/`hostedByAltinity` available if promoted).
+
+**Status:** OQ-3 and the healthy half of OQ-5 are resolved and unblock the
+`altinity_regions` data source + the create poll's success path immediately.
+OQ-1/OQ-2/OQ-4 and the error-status half of OQ-5 depend on one successful
+`EnvironmentRequest` (retry with matching region field in flight). None block
+Tasks 1–7 of the plan; they gate finalizing Task 8's request-body mapping and
+Task 4's error-status set.
 
 ## 8. Implementation outline (for the plan phase)
 
