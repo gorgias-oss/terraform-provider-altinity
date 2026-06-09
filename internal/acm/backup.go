@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm/wire"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
 )
 
 // BackupRequest is the body for POST /cluster/{id}/backup (the backup-schedule

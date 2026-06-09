@@ -7,7 +7,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm/wire"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
 )
 
 // Cluster `settings` is a bare-object field in the spec (no named

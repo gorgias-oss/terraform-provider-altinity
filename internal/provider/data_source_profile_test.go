@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
 )
 
 func profileSchema(t *testing.T) dschema.Schema {

@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
 )
 
 var (

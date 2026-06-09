@@ -27,7 +27,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm/wire"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
 )
 
 // sensitiveBodyKeys are JSON keys whose values are masked in debug logs,
@@ -462,9 +462,12 @@ func resolvePath(ep wire.Endpoint, args map[string]string) (string, error) {
 // backoffDelay returns the capped exponential backoff for the given attempt
 // (attempt >= 1).
 func backoffDelay(attempt int) time.Duration {
-	d := time.Duration(float64(retryBaseDelay) * math.Pow(2, float64(attempt-1)))
-	if d > retryMaxDelay {
+	// Compare in the float domain before converting to time.Duration: a large
+	// attempt makes the product exceed int64, which would overflow to a
+	// negative Duration and defeat the cap check.
+	d := float64(retryBaseDelay) * math.Pow(2, float64(attempt-1))
+	if d >= float64(retryMaxDelay) {
 		return retryMaxDelay
 	}
-	return d
+	return time.Duration(d)
 }

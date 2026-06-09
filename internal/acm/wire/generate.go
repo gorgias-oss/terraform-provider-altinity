@@ -10,4 +10,4 @@
 // into clean Go types for the provider.
 package wire
 
-//go:generate go run github.com/Gorgias/terraform-provider-altinity/tools/specgen
+//go:generate go run github.com/gorgias-oss/terraform-provider-altinity/tools/specgen

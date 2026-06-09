@@ -29,7 +29,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
-	"github.com/Gorgias/terraform-provider-altinity/internal/acm"
+	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
 )
 
 // Ensure the resource satisfies the framework interfaces.
