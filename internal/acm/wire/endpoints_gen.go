@@ -219,6 +219,36 @@ var Endpoints = map[string]Endpoint{
 		PathTemplate: "/cloud/{environment}/options",
 		PathParams:   []string{"environment"},
 	},
+	"EnvironmentRequest": {
+		OperationID:  "EnvironmentRequest",
+		Method:       "POST",
+		PathTemplate: "/environments/request",
+		PathParams:   nil,
+	},
+	"EnvironmentShow": {
+		OperationID:  "EnvironmentShow",
+		Method:       "GET",
+		PathTemplate: "/environment/{id}",
+		PathParams:   []string{"id"},
+	},
+	"EnvironmentEdit": {
+		OperationID:  "EnvironmentEdit",
+		Method:       "POST",
+		PathTemplate: "/environment/{id}",
+		PathParams:   []string{"id"},
+	},
+	"EnvironmentRemove": {
+		OperationID:  "EnvironmentRemove",
+		Method:       "DELETE",
+		PathTemplate: "/environment/{id}",
+		PathParams:   []string{"id"},
+	},
+	"CloudOptionsGlobal": {
+		OperationID:  "CloudOptionsGlobal",
+		Method:       "GET",
+		PathTemplate: "/cloud/options",
+		PathParams:   nil,
+	},
 }
 
 // Operation ID constants. Referencing these from the client gives a
@@ -257,4 +287,9 @@ const (
 	OpEnvironmentList        = "EnvironmentList"
 	OpNodeTypeList           = "NodeTypeList"
 	OpCloudOptions           = "CloudOptions"
+	OpEnvironmentRequest     = "EnvironmentRequest"
+	OpEnvironmentShow        = "EnvironmentShow"
+	OpEnvironmentEdit        = "EnvironmentEdit"
+	OpEnvironmentRemove      = "EnvironmentRemove"
+	OpCloudOptionsGlobal     = "CloudOptionsGlobal"
 )

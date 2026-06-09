@@ -49,6 +49,11 @@ var allowlistForGuard = []string{
 	"ClickhouseKeeperDelete",
 	"ClickhouseKeeperStatus",
 	"CloudOptions",
+	"EnvironmentRequest",
+	"EnvironmentShow",
+	"EnvironmentEdit",
+	"EnvironmentRemove",
+	"CloudOptionsGlobal",
 }
 
 // TestAllowlistedOpsResolveInSpec asserts every allowlisted operationId still
