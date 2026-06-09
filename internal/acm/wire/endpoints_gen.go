@@ -237,12 +237,6 @@ var Endpoints = map[string]Endpoint{
 		PathTemplate: "/environment/{id}",
 		PathParams:   []string{"id"},
 	},
-	"EnvironmentRemove": {
-		OperationID:  "EnvironmentRemove",
-		Method:       "DELETE",
-		PathTemplate: "/environment/{id}",
-		PathParams:   []string{"id"},
-	},
 	"CloudOptionsGlobal": {
 		OperationID:  "CloudOptionsGlobal",
 		Method:       "GET",
@@ -290,6 +284,5 @@ const (
 	OpEnvironmentRequest     = "EnvironmentRequest"
 	OpEnvironmentShow        = "EnvironmentShow"
 	OpEnvironmentEdit        = "EnvironmentEdit"
-	OpEnvironmentRemove      = "EnvironmentRemove"
 	OpCloudOptionsGlobal     = "CloudOptionsGlobal"
 )

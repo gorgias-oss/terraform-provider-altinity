@@ -107,11 +107,13 @@ var allowedOps = []string{
 	"EnvironmentList", // GET /environments
 	"NodeTypeList",    // GET /environment/{environment}/nodetypes
 	"CloudOptions",    // GET /cloud/{environment}/options (type=versions, ...)
-	// Environment lifecycle (altinity_environment resource).
+	// Environment lifecycle (altinity_environment resource). Note: there is no
+	// delete op — environment deletion requires an out-of-band email + MFA
+	// confirmation that cannot be automated, so the resource's destroy removes
+	// from state and warns rather than calling the API (see resource_environment.go).
 	"EnvironmentRequest", // POST   /environments/request
 	"EnvironmentShow",    // GET    /environment/{id}
 	"EnvironmentEdit",    // POST   /environment/{id}
-	"EnvironmentRemove",  // DELETE /environment/{id}
 	// Global cloud options (altinity_regions data source). The non-env-scoped
 	// variant of CloudOptions: region discovery happens before any environment
 	// exists, so it cannot use the {environment}-scoped endpoint.

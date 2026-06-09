@@ -108,11 +108,3 @@ func (c *Client) EditEnvironment(ctx context.Context, id int64, req EnvironmentE
 	}
 	return environmentFromWire(&w)
 }
-
-// RemoveEnvironment deletes an environment by id (DELETE /environment/{id}). A
-// 404 is surfaced as an *APIError so an already-deleted environment is treated
-// as a no-op via IsNotFound.
-func (c *Client) RemoveEnvironment(ctx context.Context, id int64) error {
-	args := map[string]string{"id": strconv.FormatInt(id, 10)}
-	return c.doJSON(ctx, wire.OpEnvironmentRemove, args, nil, nil)
-}
