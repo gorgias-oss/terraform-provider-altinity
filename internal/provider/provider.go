@@ -208,6 +208,7 @@ func (p *altinityProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewVersionsDataSource,
 		NewStorageClassesDataSource,
 		NewZonesDataSource,
+		NewRegionsDataSource,  // regions per cloud provider
 		NewProfilesDataSource, // list all
 		NewProfileDataSource,  // find one by name
 	}
