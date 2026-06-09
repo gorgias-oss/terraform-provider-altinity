@@ -30,9 +30,11 @@ vet:
 generate:
 	go generate ./...
 
-# Generate provider docs via tfplugindocs (if installed).
+# Generate provider docs into docs/ for the Terraform Registry.
+# Delegated to scripts/gen-docs.sh because our main package lives in cmd/
+# (not the module root), which a bare `tfplugindocs generate` cannot build.
 docs:
-	@command -v tfplugindocs >/dev/null && tfplugindocs generate || echo "tfplugindocs not installed, skipping"
+	@bash scripts/gen-docs.sh
 
 # Install the provider into the local filesystem mirror for manual testing.
 install: build
