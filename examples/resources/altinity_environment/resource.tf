@@ -20,8 +20,13 @@ resource "altinity_environment" "example" {
   region         = "us-east1" # or e.g. data.altinity_regions.gcp.regions[0].code
   display_name   = "Terraform Demo"
 
-  timeouts {
+  # `timeouts` is a nested attribute (note the `=`), not a block.
+  timeouts = {
     create = "45m"
     delete = "30m"
   }
+}
+
+output "altinity_regions" {
+  value = data.altinity_regions.gcp.regions
 }
