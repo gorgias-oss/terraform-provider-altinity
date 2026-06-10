@@ -5,6 +5,7 @@ package acm
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 
 	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
@@ -26,13 +27,43 @@ type EnvironmentRequest struct {
 	// First is undocumented (OQ-2) and omitted by default.
 }
 
-// EnvironmentEditRequest carries the only field the altinity_environment
-// resource mutates in v1 (POST /environment/{id}, operationId EnvironmentEdit).
-// EnvironmentEdit accepts ~50 fields; the resource sends only displayName and
-// leaves the rest untouched (omitempty), so an edit never clobbers ACM-managed
-// configuration the resource does not model.
+// DatadogSettings is the environment's Datadog integration config, sent as the
+// `datadogSettings` object on EnvironmentEdit. Key is the Datadog API key
+// (write-only at the resource layer). Live-confirmed shape (2026-06-10).
+type DatadogSettings struct {
+	Enabled    bool   `json:"enabled"`
+	Key        string `json:"key"`
+	Region     string `json:"region,omitempty"`
+	Metrics    bool   `json:"metrics"`
+	Logs       bool   `json:"logs"`
+	TableStats bool   `json:"tableStats"`
+}
+
+// MaintenanceWindow is one entry of `maintenanceWindowSchedules`. Days are full
+// uppercase weekday names (MONDAY…SUNDAY). Live-confirmed shape (2026-06-10).
+type MaintenanceWindow struct {
+	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
+	Hour          int      `json:"hour"`
+	LengthInHours int      `json:"lengthInHours"`
+	Days          []string `json:"days"`
+}
+
+// EnvironmentEditRequest carries the fields the altinity_environment resource
+// mutates (POST /environment/{id}, operationId EnvironmentEdit). EnvironmentEdit
+// accepts ~50 fields and merges a minimal patch server-side (live-confirmed:
+// displayName-only and maintenanceWindowSchedules-only edits don't clobber the
+// rest), so the resource sends only what it manages — all omitempty/nil-pointer,
+// so an unmanaged field is never sent.
+//
+// MaintenanceWindowSchedules is a POINTER so the resource can distinguish
+// "unmanaged" (nil → field omitted) from "clear all windows" (non-nil empty
+// slice → marshals `[]`); a plain slice's omitempty would drop both.
 type EnvironmentEditRequest struct {
-	DisplayName string `json:"displayName,omitempty"`
+	DisplayName                string               `json:"displayName,omitempty"`
+	DatadogSettings            *DatadogSettings     `json:"datadogSettings,omitempty"`
+	ApplyToClusters            json.RawMessage      `json:"applyToClusters,omitempty"`
+	MaintenanceWindowSchedules *[]MaintenanceWindow `json:"maintenanceWindowSchedules,omitempty"`
 }
 
 // ListEnvironments returns all environments visible to the token

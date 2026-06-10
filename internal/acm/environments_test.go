@@ -127,6 +127,55 @@ func TestEditEnvironment(t *testing.T) {
 	assert.Equal(t, "New Name", e.DisplayName)
 }
 
+func TestEditEnvironment_DatadogAndMaintenance(t *testing.T) {
+	var body map[string]any
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"2293","status":"online"}}`))
+	})
+
+	_, err := client.EditEnvironment(context.Background(), 2293, EnvironmentEditRequest{
+		DatadogSettings: &DatadogSettings{Enabled: true, Key: "synthetic-key", Region: "datadoghq.com", Metrics: true, Logs: true, TableStats: true},
+		ApplyToClusters: json.RawMessage(`{"datadog":true}`),
+		MaintenanceWindowSchedules: &[]MaintenanceWindow{
+			{Name: "w1", Enabled: true, Hour: 16, LengthInHours: 4, Days: []string{"FRIDAY"}},
+		},
+	})
+	require.NoError(t, err)
+
+	dd, ok := body["datadogSettings"].(map[string]any)
+	require.True(t, ok, "datadogSettings must be a JSON object")
+	assert.Equal(t, true, dd["enabled"])
+	assert.Equal(t, "synthetic-key", dd["key"])
+	assert.Equal(t, true, dd["tableStats"])
+	assert.Equal(t, map[string]any{"datadog": true}, body["applyToClusters"])
+
+	mw, ok := body["maintenanceWindowSchedules"].([]any)
+	require.True(t, ok, "maintenanceWindowSchedules must be a JSON array")
+	require.Len(t, mw, 1)
+	assert.Equal(t, float64(16), mw[0].(map[string]any)["hour"])
+	assert.Equal(t, float64(4), mw[0].(map[string]any)["lengthInHours"])
+}
+
+func TestEditEnvironment_EmptyMaintenanceClears(t *testing.T) {
+	var body map[string]any
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"2293"}}`))
+	})
+	// Non-nil empty slice -> field present as [] (clear all); nil pointer would omit.
+	empty := []MaintenanceWindow{}
+	_, err := client.EditEnvironment(context.Background(), 2293, EnvironmentEditRequest{MaintenanceWindowSchedules: &empty})
+	require.NoError(t, err)
+	v, present := body["maintenanceWindowSchedules"]
+	require.True(t, present, "empty maintenance list must still be sent (clear)")
+	assert.Empty(t, v.([]any))
+}
+
 func TestListNodeTypes_DecodesFixture(t *testing.T) {
 	var gotPath string
 	client := serveFixtureClient(t, "testdata/nodetypes.json", &gotPath)
