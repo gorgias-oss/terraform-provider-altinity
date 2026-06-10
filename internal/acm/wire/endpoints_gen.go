@@ -201,6 +201,24 @@ var Endpoints = map[string]Endpoint{
 		PathTemplate: "/environment/{environment}/keeper/{name}/status",
 		PathParams:   []string{"environment", "name"},
 	},
+	"NodeTypeAdd": {
+		OperationID:  "NodeTypeAdd",
+		Method:       "POST",
+		PathTemplate: "/environment/{environment}/nodetypes",
+		PathParams:   []string{"environment"},
+	},
+	"NodeTypeEdit": {
+		OperationID:  "NodeTypeEdit",
+		Method:       "POST",
+		PathTemplate: "/nodetype/{id}",
+		PathParams:   []string{"id"},
+	},
+	"NodeTypeRemove": {
+		OperationID:  "NodeTypeRemove",
+		Method:       "DELETE",
+		PathTemplate: "/nodetype/{id}",
+		PathParams:   []string{"id"},
+	},
 	"EnvironmentList": {
 		OperationID:  "EnvironmentList",
 		Method:       "GET",
@@ -278,6 +296,9 @@ const (
 	OpClickhouseKeeperEdit   = "ClickhouseKeeperEdit"
 	OpClickhouseKeeperDelete = "ClickhouseKeeperDelete"
 	OpClickhouseKeeperStatus = "ClickhouseKeeperStatus"
+	OpNodeTypeAdd            = "NodeTypeAdd"
+	OpNodeTypeEdit           = "NodeTypeEdit"
+	OpNodeTypeRemove         = "NodeTypeRemove"
 	OpEnvironmentList        = "EnvironmentList"
 	OpNodeTypeList           = "NodeTypeList"
 	OpCloudOptions           = "CloudOptions"
