@@ -127,6 +127,7 @@ func TestNodeTypeResource_CreateFresh(t *testing.T) {
 // CreateWithName: name set & != code -> follow-up NodeTypeEdit applies it.
 func TestNodeTypeResource_CreateWithNameDoesFollowUpEdit(t *testing.T) {
 	edited := false
+	var editBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -136,6 +137,8 @@ func TestNodeTypeResource_CreateWithNameDoesFollowUpEdit(t *testing.T) {
 			http.ServeFile(w, r, "../acm/testdata/nodetype_create_response.json")
 		case strings.HasPrefix(r.URL.Path, "/nodetype/") && r.Method == http.MethodPost:
 			edited = true
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &editBody)
 			_, _ = w.Write([]byte(`{"data":{"id":"14140","scope":"clickhouse","code":"c4-standard-24-lssd","name":"my-pool","cpu":"24","memory":"80160","capacity":"10","isSpot":false}}`))
 		default:
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
@@ -154,6 +157,12 @@ func TestNodeTypeResource_CreateWithNameDoesFollowUpEdit(t *testing.T) {
 	r.Create(ctx, req, &resp)
 	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
 	assert.True(t, edited, "a custom name must trigger a follow-up edit")
+	// Regression: the follow-up edit must carry a non-zero memory, else ACM
+	// rejects with "Invalid Memory Value".
+	assert.NotNil(t, editBody["memory"], "follow-up edit must send memory")
+	if m, ok := editBody["memory"].(float64); ok {
+		assert.Greater(t, m, float64(0), "follow-up edit memory must be non-zero")
+	}
 
 	var out nodeTypeResourceModel
 	require.False(t, resp.State.Get(ctx, &out).HasError())

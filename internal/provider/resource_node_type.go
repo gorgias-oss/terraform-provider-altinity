@@ -224,9 +224,13 @@ func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateReques
 	// name (NOT nt.Name, which is still the code).
 	if desiredName != "" && desiredName != nt.Name {
 		edited, eerr := r.client.EditNodeType(ctx, nt.ID, acm.NodeTypeRequest{
-			Name:         desiredName,
-			Scope:        nt.Scope,
-			Code:         nt.Code,
+			Name:  desiredName,
+			Scope: nt.Scope,
+			Code:  nt.Code,
+			// CPU/Memory must be sent: ACM rejects the edit with "Invalid Memory
+			// Value" if memory is 0. Use the just-created authoritative values.
+			CPU:          nt.CPU,
+			Memory:       nt.Memory,
 			Capacity:     nt.Capacity,
 			StorageClass: nt.StorageClass,
 			IsSpot:       nt.IsSpot,
