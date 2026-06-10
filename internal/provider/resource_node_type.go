@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
@@ -94,12 +95,19 @@ func (r *nodeTypeResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Description: "Instance type code (see the altinity_instance_types data source). Editable in place.",
 			},
 			"cpu": schema.Float64Attribute{
-				Required:    true,
-				Description: "vCPUs for this node type.",
+				Optional: true,
+				Computed: true,
+				Description: "vCPUs for this node type. Sent to ACM as a hint; ACM derives the " +
+					"authoritative value from the instance type `code`, so the read-back value wins.",
+				PlanModifiers: []planmodifier.Float64{nodeTypeSizeFloat64PlanModifier{}},
 			},
 			"memory": schema.Int64Attribute{
-				Required:    true,
-				Description: "Memory in MB for this node type.",
+				Optional: true,
+				Computed: true,
+				Description: "Memory in MB for this node type. Sent to ACM as a hint; ACM derives the " +
+					"authoritative value from the instance type `code` (the allocatable memory), so the " +
+					"read-back value wins — do not expect the submitted value to be kept verbatim.",
+				PlanModifiers: []planmodifier.Int64{nodeTypeSizeInt64PlanModifier{}},
 			},
 			"capacity": schema.Int64Attribute{
 				Optional:      true,
@@ -150,26 +158,6 @@ func (r *nodeTypeResource) Configure(_ context.Context, req resource.ConfigureRe
 	r.client = client
 }
 
-// buildNodeTypeRequest assembles the create/edit body from the plan, attaching
-// the supplied opaque fields (scope defaults on create, preserved values on
-// update).
-func (r *nodeTypeResource) buildNodeTypeRequest(m nodeTypeResourceModel, nt acm.NodeType) acm.NodeTypeRequest {
-	req := acm.NodeTypeRequest{
-		Name:         m.Name.ValueString(),
-		Scope:        m.Scope.ValueString(),
-		Code:         m.Code.ValueString(),
-		CPU:          m.CPU.ValueFloat64(),
-		Memory:       m.Memory.ValueInt64(),
-		Capacity:     m.Capacity.ValueInt64(),
-		StorageClass: m.StorageClass.ValueString(),
-		IsSpot:       m.IsSpot.ValueBool(),
-		Tolerations:  nt.Tolerations,
-		NodeSelector: nt.NodeSelector,
-		ExtraSpec:    nt.ExtraSpec,
-	}
-	return req
-}
-
 func applyNodeTypeToModel(m *nodeTypeResourceModel, nt acm.NodeType) {
 	m.NodeTypeID = types.StringValue(strconv.FormatInt(nt.ID, 10))
 	m.ID = types.StringValue(m.Environment.ValueString() + ":" + strconv.FormatInt(nt.ID, 10))
@@ -184,8 +172,12 @@ func applyNodeTypeToModel(m *nodeTypeResourceModel, nt acm.NodeType) {
 }
 
 func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan nodeTypeResourceModel
+	var plan, config nodeTypeResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	// config carries the operator's cpu/memory hints, which the plan modifier
+	// blanks out of the plan (they are server-derived). They are sent to ACM as
+	// the create hint; ACM's returned values are authoritative.
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -193,6 +185,7 @@ func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateReques
 	env := plan.Environment.ValueString()
 	scope := plan.Scope.ValueString()
 	code := plan.Code.ValueString()
+	desiredName := config.Name.ValueString()
 
 	// Adopt-by-(scope,code) then create — both inside one RetryWhileBusy so a
 	// transient env lock retries the whole sequence (mirrors the keeper resource).
@@ -208,11 +201,11 @@ func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateReques
 		}
 		// Fresh create: mirror the ACM UI by sending the scope-default tolerations.
 		created, cerr := r.client.CreateNodeType(ctx, env, acm.NodeTypeRequest{
-			Name:         plan.Name.ValueString(),
+			Name:         desiredName,
 			Scope:        scope,
 			Code:         code,
-			CPU:          plan.CPU.ValueFloat64(),
-			Memory:       plan.Memory.ValueInt64(),
+			CPU:          config.CPU.ValueFloat64(),
+			Memory:       config.Memory.ValueInt64(),
 			Capacity:     plan.Capacity.ValueInt64(),
 			StorageClass: plan.StorageClass.ValueString(),
 			IsSpot:       plan.IsSpot.ValueBool(),
@@ -232,11 +225,21 @@ func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	// ACM ignores `name` on create (the created name equals the code). If the
-	// operator set a different name, apply it via a follow-up edit, preserving
-	// the just-created opaque fields.
-	if !plan.Name.IsNull() && !plan.Name.IsUnknown() && plan.Name.ValueString() != "" && plan.Name.ValueString() != nt.Name {
-		applyNodeTypeToModel(&plan, nt) // ensures plan.Code etc. reflect created values
-		edited, eerr := r.client.EditNodeType(ctx, nt.ID, r.buildNodeTypeRequest(plan, nt))
+	// operator set a different name, apply it via a follow-up edit — carrying the
+	// just-created opaque fields and authoritative sizing, and the operator's
+	// name (NOT nt.Name, which is still the code).
+	if desiredName != "" && desiredName != nt.Name {
+		edited, eerr := r.client.EditNodeType(ctx, nt.ID, acm.NodeTypeRequest{
+			Name:         desiredName,
+			Scope:        nt.Scope,
+			Code:         nt.Code,
+			Capacity:     nt.Capacity,
+			StorageClass: nt.StorageClass,
+			IsSpot:       nt.IsSpot,
+			Tolerations:  nt.Tolerations,
+			NodeSelector: nt.NodeSelector,
+			ExtraSpec:    nt.ExtraSpec,
+		})
 		if eerr != nil {
 			resp.Diagnostics.AddError("Failed to set node type name after create", eerr.Error())
 			return
@@ -303,8 +306,9 @@ func (r *nodeTypeResource) findNodeType(ctx context.Context, state nodeTypeResou
 }
 
 func (r *nodeTypeResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan nodeTypeResourceModel
+	var plan, config nodeTypeResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -327,7 +331,21 @@ func (r *nodeTypeResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	updated, eerr := r.client.EditNodeType(ctx, id, r.buildNodeTypeRequest(plan, cur))
+	// cpu/memory are server-derived from code; send the operator's config hints
+	// (ACM re-normalizes), and preserve the opaque fields from the current type.
+	updated, eerr := r.client.EditNodeType(ctx, id, acm.NodeTypeRequest{
+		Name:         plan.Name.ValueString(),
+		Scope:        plan.Scope.ValueString(),
+		Code:         plan.Code.ValueString(),
+		CPU:          config.CPU.ValueFloat64(),
+		Memory:       config.Memory.ValueInt64(),
+		Capacity:     plan.Capacity.ValueInt64(),
+		StorageClass: plan.StorageClass.ValueString(),
+		IsSpot:       plan.IsSpot.ValueBool(),
+		Tolerations:  cur.Tolerations,
+		NodeSelector: cur.NodeSelector,
+		ExtraSpec:    cur.ExtraSpec,
+	})
 	if eerr != nil {
 		resp.Diagnostics.AddError("Failed to update node type", eerr.Error())
 		return
@@ -380,6 +398,66 @@ func (r *nodeTypeResource) ImportState(ctx context.Context, req resource.ImportS
 // emptyJSONString is the JSON literal "" the ACM UI sends for nodeSelector /
 // extraSpec on create.
 var emptyJSONString = []byte(`""`)
+
+// nodeTypeSize{Float64,Int64}PlanModifier make cpu/memory server-authoritative:
+// ACM derives them from the instance type `code` (memory is normalized to the
+// node's allocatable, which the operator cannot predict). The modifier forces
+// the planned value to "known after apply" on create or whenever `code` changes
+// — so ACM's returned value is accepted without an inconsistent-result error —
+// and otherwise keeps the prior state value (no spurious diffs when `code` is
+// unchanged, even if the operator's cpu/memory hint in config differs).
+//
+// The bodies are deliberately identical across the two numeric types, which the
+// framework models with distinct interfaces; mirror any change in both.
+const nodeTypeSizePlanModifierDesc = "server-derived from code; known after apply on create or code change"
+
+type nodeTypeSizeFloat64PlanModifier struct{}
+
+func (nodeTypeSizeFloat64PlanModifier) Description(context.Context) string {
+	return nodeTypeSizePlanModifierDesc
+}
+func (nodeTypeSizeFloat64PlanModifier) MarkdownDescription(context.Context) string {
+	return nodeTypeSizePlanModifierDesc
+}
+func (nodeTypeSizeFloat64PlanModifier) PlanModifyFloat64(ctx context.Context, req planmodifier.Float64Request, resp *planmodifier.Float64Response) {
+	if req.State.Raw.IsNull() {
+		resp.PlanValue = types.Float64Unknown() // create
+		return
+	}
+	if nodeTypeCodeChanged(ctx, req.Plan, req.State) {
+		resp.PlanValue = types.Float64Unknown()
+		return
+	}
+	resp.PlanValue = req.StateValue
+}
+
+type nodeTypeSizeInt64PlanModifier struct{}
+
+func (nodeTypeSizeInt64PlanModifier) Description(context.Context) string {
+	return nodeTypeSizePlanModifierDesc
+}
+func (nodeTypeSizeInt64PlanModifier) MarkdownDescription(context.Context) string {
+	return nodeTypeSizePlanModifierDesc
+}
+func (nodeTypeSizeInt64PlanModifier) PlanModifyInt64(ctx context.Context, req planmodifier.Int64Request, resp *planmodifier.Int64Response) {
+	if req.State.Raw.IsNull() {
+		resp.PlanValue = types.Int64Unknown() // create
+		return
+	}
+	if nodeTypeCodeChanged(ctx, req.Plan, req.State) {
+		resp.PlanValue = types.Int64Unknown()
+		return
+	}
+	resp.PlanValue = req.StateValue
+}
+
+// nodeTypeCodeChanged reports whether the planned `code` differs from state.
+func nodeTypeCodeChanged(ctx context.Context, plan tfsdk.Plan, state tfsdk.State) bool {
+	var planCode, stateCode types.String
+	plan.GetAttribute(ctx, path.Root("code"), &planCode)
+	state.GetAttribute(ctx, path.Root("code"), &stateCode)
+	return !planCode.Equal(stateCode)
+}
 
 // nodeTypeScopeValidator restricts scope to the values ACM accepts.
 type nodeTypeScopeValidator struct{}
