@@ -235,6 +235,19 @@ type NodeType struct {
 	Memory        int64
 	Capacity      int64
 	IDEnvironment int64
+
+	// Used reports whether a cluster currently uses this node type. Populated
+	// only from the list ?withUsed=1 response (not part of the OpenAPI schema);
+	// see nodeTypeRaw. Read-only.
+	Used bool
+
+	// Opaque passthrough — preserved verbatim on update so an edit never alters
+	// ACM's tolerations / node selector / extra spec. Never surfaced to
+	// Terraform (managing these is not supported; the resource mirrors the ACM
+	// UI's scope defaults on create and preserves them thereafter).
+	Tolerations  json.RawMessage
+	NodeSelector json.RawMessage
+	ExtraSpec    json.RawMessage
 }
 
 // ---- wire -> domain coercion ----
@@ -402,5 +415,9 @@ func nodeTypeFromWire(w *wire.NodeType) (NodeType, error) {
 	nt.Name = w.Name
 	nt.StorageClass = w.StorageClass
 	nt.IsSpot = w.IsSpot.Bool()
+	// Opaque passthrough (preserved on update).
+	nt.Tolerations = w.Tolerations
+	nt.NodeSelector = w.NodeSelector
+	nt.ExtraSpec = w.ExtraSpec
 	return nt, nil
 }
