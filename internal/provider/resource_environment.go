@@ -5,14 +5,18 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -59,17 +63,52 @@ func NewEnvironmentResource() resource.Resource {
 }
 
 type environmentResourceModel struct {
-	ID             types.String `tfsdk:"id"`
-	Name           types.String `tfsdk:"name"`
-	CloudProvider  types.String `tfsdk:"cloud_provider"`
-	Region         types.String `tfsdk:"region"`
-	DisplayName    types.String `tfsdk:"display_name"`
-	NormalizedName types.String `tfsdk:"normalized_name"`
-	Type           types.String `tfsdk:"type"`
-	Domain         types.String `tfsdk:"domain"`
-	Status         types.String `tfsdk:"status"`
-	State          types.String `tfsdk:"state"`
-	Timeouts       types.Object `tfsdk:"timeouts"`
+	ID                 types.String  `tfsdk:"id"`
+	Name               types.String  `tfsdk:"name"`
+	CloudProvider      types.String  `tfsdk:"cloud_provider"`
+	Region             types.String  `tfsdk:"region"`
+	DisplayName        types.String  `tfsdk:"display_name"`
+	NormalizedName     types.String  `tfsdk:"normalized_name"`
+	Type               types.String  `tfsdk:"type"`
+	Domain             types.String  `tfsdk:"domain"`
+	Status             types.String  `tfsdk:"status"`
+	State              types.String  `tfsdk:"state"`
+	Datadog            *datadogModel `tfsdk:"datadog"`
+	MaintenanceWindows types.List    `tfsdk:"maintenance_windows"`
+	Timeouts           types.Object  `tfsdk:"timeouts"`
+}
+
+// datadogModel maps the optional `datadog {}` block. api_key is write-only
+// (sent, never read back); apply_to_clusters is a write-side directive (not
+// echoed by GET). enabled/region/send_* are reconciled from EnvironmentShow.
+type datadogModel struct {
+	Enabled         types.Bool   `tfsdk:"enabled"`
+	APIKey          types.String `tfsdk:"api_key"`
+	Region          types.String `tfsdk:"region"`
+	SendMetrics     types.Bool   `tfsdk:"send_metrics"`
+	SendLogs        types.Bool   `tfsdk:"send_logs"`
+	SendTableStats  types.Bool   `tfsdk:"send_table_stats"`
+	ApplyToClusters types.Bool   `tfsdk:"apply_to_clusters"`
+}
+
+// maintenanceWindowModel maps one `maintenance_windows` entry.
+type maintenanceWindowModel struct {
+	Name        types.String `tfsdk:"name"`
+	Enabled     types.Bool   `tfsdk:"enabled"`
+	Hour        types.Int64  `tfsdk:"hour"`
+	LengthHours types.Int64  `tfsdk:"length_hours"`
+	Days        types.List   `tfsdk:"days"`
+}
+
+// maintenanceWindowAttrTypes is the object type of a maintenance_windows element.
+func maintenanceWindowAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"name":         types.StringType,
+		"enabled":      types.BoolType,
+		"hour":         types.Int64Type,
+		"length_hours": types.Int64Type,
+		"days":         types.ListType{ElemType: types.StringType},
+	}
 }
 
 func (r *environmentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -164,6 +203,66 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"datadog": schema.SingleNestedAttribute{
+				Optional: true,
+				Description: "Datadog integration for the environment (ship ClickHouse metrics/logs to Datadog). " +
+					"Omit the block to leave Datadog unmanaged.",
+				Attributes: map[string]schema.Attribute{
+					"enabled": schema.BoolAttribute{
+						Optional: true, Computed: true,
+						Description:   "Whether the Datadog integration is enabled.",
+						PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+					},
+					"api_key": schema.StringAttribute{
+						Optional:  true,
+						Sensitive: true,
+						Description: "Datadog API key. Write-only: sent on apply, never read back from the API, " +
+							"and excluded from drift detection (an out-of-band change is not noticed).",
+					},
+					"region": schema.StringAttribute{
+						Optional: true, Computed: true,
+						Description:   "Datadog site, e.g. datadoghq.com (default) or datadoghq.eu.",
+						PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+					},
+					"send_metrics": schema.BoolAttribute{
+						Optional: true, Computed: true,
+						PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+					},
+					"send_logs": schema.BoolAttribute{
+						Optional: true, Computed: true,
+						PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+					},
+					"send_table_stats": schema.BoolAttribute{
+						Optional: true, Computed: true,
+						PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+					},
+					"apply_to_clusters": schema.BoolAttribute{
+						Optional: true, Computed: true,
+						Description:   "Push the Datadog config to the environment's clusters (applyToClusters). Defaults to true.",
+						PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+					},
+				},
+			},
+			"maintenance_windows": schema.ListNestedAttribute{
+				Optional: true,
+				Description: "Maintenance windows for the environment. ACM requires the windows to provide " +
+					"at least 48h over any 32-day window (rejected server-side otherwise). Omit (null) to leave " +
+					"unmanaged; set `[]` to clear all windows. Not reconciled against the API on read.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"name":         schema.StringAttribute{Required: true},
+						"enabled":      schema.BoolAttribute{Required: true},
+						"hour":         schema.Int64Attribute{Required: true, Description: "Start hour, 0–23 (UTC)."},
+						"length_hours": schema.Int64Attribute{Required: true, Description: "Window length in hours."},
+						"days": schema.ListAttribute{
+							ElementType: types.StringType,
+							Required:    true,
+							Description: "Weekdays (uppercase): MONDAY…SUNDAY.",
+							Validators:  []validator.List{weekdayListValidator{}},
+						},
+					},
+				},
+			},
 			"timeouts": schema.SingleNestedAttribute{
 				Optional:    true,
 				Description: "Operation timeouts (Go duration strings). create defaults to 45m, delete to 30m.",
@@ -225,7 +324,9 @@ func (r *environmentResource) buildEnvRequest(m environmentResourceModel) acm.En
 // applyEnvironmentToModel writes the API's computed fields onto the model. It
 // deliberately does NOT touch name/cloud_provider/region (RequiresReplace,
 // operator-owned, and not echoed back in a directly-mappable form) — those are
-// preserved from plan/state.
+// preserved from plan/state. The datadog block is reconciled in-place for its
+// non-secret fields; `api_key`/`apply_to_clusters` and `maintenance_windows`
+// are operator/write-owned and left as the caller's model already holds them.
 func applyEnvironmentToModel(m *environmentResourceModel, e acm.Environment) {
 	m.ID = types.StringValue(strconv.FormatInt(e.ID, 10))
 	m.Name = types.StringValue(e.Name)
@@ -235,6 +336,33 @@ func applyEnvironmentToModel(m *environmentResourceModel, e acm.Environment) {
 	m.Domain = types.StringValue(e.Domain)
 	m.Status = types.StringValue(e.Status)
 	m.State = types.StringValue(e.State)
+
+	// Datadog: reconcile the non-secret Computed fields from the API only when the
+	// operator manages the block (m.Datadog != nil). Every Computed sub-field must
+	// end up KNOWN (else "provider produced inconsistent result"): use the API
+	// value, falling back to a default when the GET doesn't echo datadog. Preserve
+	// api_key (write-only) as-is; resolve apply_to_clusters (write-side, not
+	// echoed) to its effective default (true) when unset. If unmanaged, leave nil.
+	if m.Datadog != nil {
+		dd := e.Datadog
+		if dd == nil {
+			dd = &acm.DatadogConfig{}
+		}
+		m.Datadog.Enabled = types.BoolValue(dd.Enabled)
+		m.Datadog.SendMetrics = types.BoolValue(dd.Metrics)
+		m.Datadog.SendLogs = types.BoolValue(dd.Logs)
+		m.Datadog.SendTableStats = types.BoolValue(dd.TableStats)
+		region := dd.Region
+		if region == "" {
+			region = "datadoghq.com"
+		}
+		m.Datadog.Region = types.StringValue(region)
+		if m.Datadog.ApplyToClusters.IsNull() || m.Datadog.ApplyToClusters.IsUnknown() {
+			m.Datadog.ApplyToClusters = types.BoolValue(true)
+		}
+	}
+	// maintenance_windows is config-authoritative (not reconciled from the API —
+	// see OQ-4); leave m.MaintenanceWindows as the caller's model holds it.
 }
 
 func (r *environmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -313,16 +441,20 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	// If the operator specified a display_name, apply it now — the request
-	// endpoint cannot set it, so without this Create would produce state that
-	// disagrees with the plan.
-	if !plan.DisplayName.IsUnknown() && !plan.DisplayName.IsNull() && plan.DisplayName.ValueString() != "" {
-		dn := plan.DisplayName.ValueString()
+	// The request endpoint can't set display_name / datadog / maintenance_windows,
+	// so apply whatever the operator configured via one EnvironmentEdit follow-up
+	// after the environment is ready.
+	if envEditNeeded(plan) {
+		editReq, d := buildEnvEditRequest(ctx, plan)
+		resp.Diagnostics.Append(d...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
 		if err := acm.RetryWhileBusy(opCtx, func() error {
-			_, e := r.client.EditEnvironment(opCtx, envID, acm.EnvironmentEditRequest{DisplayName: dn})
+			_, e := r.client.EditEnvironment(opCtx, envID, editReq)
 			return e
 		}); err != nil {
-			resp.Diagnostics.AddError("Failed to set environment display_name after create", err.Error())
+			resp.Diagnostics.AddError("Failed to apply environment configuration after create", err.Error())
 			return
 		}
 	}
@@ -375,9 +507,15 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	// display_name is the only mutable attribute (everything else is ForceNew).
+	// Mutable: display_name, datadog, maintenance_windows (everything else is
+	// ForceNew). One EnvironmentEdit carries whatever the operator manages.
+	editReq, d := buildEnvEditRequest(ctx, plan)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	if err := acm.RetryWhileBusy(ctx, func() error {
-		_, e := r.client.EditEnvironment(ctx, id, acm.EnvironmentEditRequest{DisplayName: plan.DisplayName.ValueString()})
+		_, e := r.client.EditEnvironment(ctx, id, editReq)
 		return e
 	}); err != nil {
 		resp.Diagnostics.AddError("Failed to update environment", err.Error())
@@ -423,6 +561,104 @@ func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteReq
 // ImportState imports by the ACM environment id.
 func (r *environmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// envEditNeeded reports whether the plan has anything the EnvironmentEdit
+// follow-up should send (display_name / datadog / maintenance_windows).
+func envEditNeeded(p environmentResourceModel) bool {
+	if !p.DisplayName.IsNull() && !p.DisplayName.IsUnknown() && p.DisplayName.ValueString() != "" {
+		return true
+	}
+	if p.Datadog != nil {
+		return true
+	}
+	if !p.MaintenanceWindows.IsNull() && !p.MaintenanceWindows.IsUnknown() {
+		return true
+	}
+	return false
+}
+
+// buildEnvEditRequest assembles the EnvironmentEdit body from the plan. Only the
+// fields the operator manages are populated (all omitempty / nil-pointer), so
+// the merge-patch leaves everything else untouched.
+func buildEnvEditRequest(ctx context.Context, plan environmentResourceModel) (acm.EnvironmentEditRequest, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	req := acm.EnvironmentEditRequest{DisplayName: plan.DisplayName.ValueString()}
+
+	if dd := plan.Datadog; dd != nil {
+		region := dd.Region.ValueString()
+		if region == "" {
+			region = "datadoghq.com"
+		}
+		req.DatadogSettings = &acm.DatadogSettings{
+			Enabled:    dd.Enabled.ValueBool(),
+			Key:        dd.APIKey.ValueString(),
+			Region:     region,
+			Metrics:    dd.SendMetrics.ValueBool(),
+			Logs:       dd.SendLogs.ValueBool(),
+			TableStats: dd.SendTableStats.ValueBool(),
+		}
+		// apply_to_clusters defaults to true (null/unknown → true).
+		if dd.ApplyToClusters.IsNull() || dd.ApplyToClusters.IsUnknown() || dd.ApplyToClusters.ValueBool() {
+			req.ApplyToClusters = json.RawMessage(`{"datadog":true}`)
+		}
+	}
+
+	// null → unmanaged (leave nil). known (incl. empty []) → send a non-nil
+	// pointer so an empty list marshals `[]` (clear all), distinct from omitted.
+	if !plan.MaintenanceWindows.IsNull() && !plan.MaintenanceWindows.IsUnknown() {
+		var models []maintenanceWindowModel
+		diags.Append(plan.MaintenanceWindows.ElementsAs(ctx, &models, false)...)
+		if diags.HasError() {
+			return req, diags
+		}
+		windows := make([]acm.MaintenanceWindow, 0, len(models))
+		for _, m := range models {
+			var days []string
+			diags.Append(m.Days.ElementsAs(ctx, &days, false)...)
+			windows = append(windows, acm.MaintenanceWindow{
+				Name:          m.Name.ValueString(),
+				Enabled:       m.Enabled.ValueBool(),
+				Hour:          int(m.Hour.ValueInt64()),
+				LengthInHours: int(m.LengthHours.ValueInt64()),
+				Days:          days,
+			})
+		}
+		req.MaintenanceWindowSchedules = &windows
+	}
+	return req, diags
+}
+
+// weekdayListValidator rejects `days` entries that aren't uppercase weekday names.
+type weekdayListValidator struct{}
+
+func (weekdayListValidator) Description(context.Context) string {
+	return "each day must be an uppercase weekday name (MONDAY…SUNDAY)"
+}
+
+func (v weekdayListValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (weekdayListValidator) ValidateList(ctx context.Context, req validator.ListRequest, resp *validator.ListResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	var days []string
+	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &days, false)...)
+	valid := map[string]bool{
+		"MONDAY": true, "TUESDAY": true, "WEDNESDAY": true, "THURSDAY": true,
+		"FRIDAY": true, "SATURDAY": true, "SUNDAY": true,
+	}
+	for _, d := range days {
+		if !valid[d] {
+			resp.Diagnostics.AddAttributeError(
+				req.Path,
+				"Invalid weekday",
+				fmt.Sprintf("day %q must be an uppercase weekday name (MONDAY…SUNDAY)", d),
+			)
+		}
+	}
 }
 
 // cloudProviderValidator rejects cloud_provider values ACM's request endpoint

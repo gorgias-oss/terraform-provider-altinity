@@ -13,8 +13,10 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
@@ -50,18 +52,186 @@ func newEnvState(t *testing.T, s rschema.Schema, m environmentResourceModel) tfs
 // freshEnvPlan is a create plan with all computed fields Unknown.
 func freshEnvPlan() environmentResourceModel {
 	return environmentResourceModel{
-		ID:             types.StringUnknown(),
-		Name:           types.StringValue("tf-test-env"),
-		CloudProvider:  types.StringValue("gcp"),
-		Region:         types.StringValue("us-east1"),
-		DisplayName:    types.StringUnknown(),
-		NormalizedName: types.StringUnknown(),
-		Type:           types.StringUnknown(),
-		Domain:         types.StringUnknown(),
-		Status:         types.StringUnknown(),
-		State:          types.StringUnknown(),
-		Timeouts:       nullTimeouts(),
+		ID:                 types.StringUnknown(),
+		Name:               types.StringValue("tf-test-env"),
+		CloudProvider:      types.StringValue("gcp"),
+		Region:             types.StringValue("us-east1"),
+		DisplayName:        types.StringUnknown(),
+		NormalizedName:     types.StringUnknown(),
+		Type:               types.StringUnknown(),
+		Domain:             types.StringUnknown(),
+		Status:             types.StringUnknown(),
+		State:              types.StringUnknown(),
+		Datadog:            nil,
+		MaintenanceWindows: types.ListNull(types.ObjectType{AttrTypes: maintenanceWindowAttrTypes()}),
+		Timeouts:           nullTimeouts(),
 	}
+}
+
+// mwList builds a maintenance_windows list value from models, for test plans.
+func mwList(t *testing.T, windows ...maintenanceWindowModel) types.List {
+	t.Helper()
+	objType := types.ObjectType{AttrTypes: maintenanceWindowAttrTypes()}
+	if windows == nil {
+		windows = []maintenanceWindowModel{}
+	}
+	l, d := types.ListValueFrom(context.Background(), objType, windows)
+	require.False(t, d.HasError(), "mwList: %v", d)
+	return l
+}
+
+// daysList builds a list(string) value for a window's days.
+func daysList(t *testing.T, days ...string) types.List {
+	t.Helper()
+	l, d := types.ListValueFrom(context.Background(), types.StringType, days)
+	require.False(t, d.HasError(), "daysList: %v", d)
+	return l
+}
+
+// datadogPlan returns a fresh create plan with a configured datadog block.
+func datadogPlan() environmentResourceModel {
+	p := freshEnvPlan()
+	p.Datadog = &datadogModel{
+		Enabled:         types.BoolValue(true),
+		APIKey:          types.StringValue("synthetic-key"),
+		Region:          types.StringValue("datadoghq.com"),
+		SendMetrics:     types.BoolValue(true),
+		SendLogs:        types.BoolValue(true),
+		SendTableStats:  types.BoolValue(false),
+		ApplyToClusters: types.BoolUnknown(), // default-true path
+	}
+	return p
+}
+
+// envCreateServer serves the request/list/show endpoints for a fresh create,
+// capturing the follow-up EnvironmentEdit body in *editBody.
+func envCreateServer(t *testing.T, editBody *map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/environments" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":[]}`)) // adopt probe: not found
+		case r.URL.Path == "/environments/request" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"data":{"id":"700","name":"tf-test-env","status":"provisioning"}}`))
+		case strings.HasPrefix(r.URL.Path, "/environment/") && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, editBody)
+			_, _ = w.Write([]byte(`{"data":{"id":"700","status":"online"}}`))
+		case strings.HasPrefix(r.URL.Path, "/environment/") && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(envReady))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestEnvironmentResource_CreateWithDatadog(t *testing.T) {
+	var editBody map[string]any
+	srv := envCreateServer(t, &editBody)
+	r := &environmentResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
+	s := environmentSchema(t)
+	ctx := context.Background()
+
+	req := resource.CreateRequest{Plan: newEnvPlan(t, s, datadogPlan())}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
+	r.Create(ctx, req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
+
+	dd, ok := editBody["datadogSettings"].(map[string]any)
+	require.True(t, ok, "datadogSettings must be sent")
+	assert.Equal(t, true, dd["enabled"])
+	assert.Equal(t, "synthetic-key", dd["key"])
+	assert.Equal(t, true, dd["metrics"])
+	assert.Equal(t, map[string]any{"datadog": true}, editBody["applyToClusters"], "apply_to_clusters default true")
+
+	var out environmentResourceModel
+	require.False(t, resp.State.Get(ctx, &out).HasError())
+	require.NotNil(t, out.Datadog)
+	assert.Equal(t, "synthetic-key", out.Datadog.APIKey.ValueString(), "api_key preserved from config")
+	assert.True(t, out.Datadog.ApplyToClusters.ValueBool(), "apply_to_clusters resolved to true")
+}
+
+func TestEnvironmentResource_CreateWithMaintenanceWindows(t *testing.T) {
+	var editBody map[string]any
+	srv := envCreateServer(t, &editBody)
+	r := &environmentResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
+	s := environmentSchema(t)
+	ctx := context.Background()
+
+	plan := freshEnvPlan()
+	plan.MaintenanceWindows = mwList(t, maintenanceWindowModel{
+		Name: types.StringValue("w1"), Enabled: types.BoolValue(true), Hour: types.Int64Value(16),
+		LengthHours: types.Int64Value(4), Days: daysList(t, "FRIDAY", "SATURDAY"),
+	})
+	req := resource.CreateRequest{Plan: newEnvPlan(t, s, plan)}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
+	r.Create(ctx, req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
+
+	mw, ok := editBody["maintenanceWindowSchedules"].([]any)
+	require.True(t, ok, "maintenanceWindowSchedules must be sent")
+	require.Len(t, mw, 1)
+	w := mw[0].(map[string]any)
+	assert.Equal(t, "w1", w["name"])
+	assert.Equal(t, float64(16), w["hour"])
+	assert.Equal(t, float64(4), w["lengthInHours"])
+	assert.ElementsMatch(t, []any{"FRIDAY", "SATURDAY"}, w["days"])
+}
+
+func TestEnvironmentResource_MaintenanceNullVsEmpty(t *testing.T) {
+	ctx := context.Background()
+	// null → field omitted (unmanaged).
+	reqNull, dNull := buildEnvEditRequest(ctx, freshEnvPlan())
+	require.False(t, dNull.HasError())
+	assert.Nil(t, reqNull.MaintenanceWindowSchedules, "null list must not send the field")
+
+	// [] → non-nil pointer to empty slice (clear all).
+	planEmpty := freshEnvPlan()
+	planEmpty.MaintenanceWindows = mwList(t) // empty
+	reqEmpty, dEmpty := buildEnvEditRequest(ctx, planEmpty)
+	require.False(t, dEmpty.HasError())
+	require.NotNil(t, reqEmpty.MaintenanceWindowSchedules, "empty list must send [] (clear)")
+	assert.Len(t, *reqEmpty.MaintenanceWindowSchedules, 0)
+}
+
+func TestEnvironmentResource_ReadPreservesApiKey(t *testing.T) {
+	// GET returns datadog with a DIFFERENT key; api_key must stay the configured value.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"700","name":"tf-test-env","type":"kubernetes","status":"online",` +
+			`"datadogSettings":{"enabled":true,"key":"SERVER-SIDE-DIFFERENT","region":"datadoghq.com","metrics":true,"logs":false,"tableStats":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	r := &environmentResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
+	s := environmentSchema(t)
+	ctx := context.Background()
+
+	state := datadogPlan()
+	state.ID = types.StringValue("700")
+	state.Datadog.ApplyToClusters = types.BoolValue(true)
+	req := resource.ReadRequest{State: newEnvState(t, s, state)}
+	resp := resource.ReadResponse{State: newEnvState(t, s, state)}
+	r.Read(ctx, req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "read diags: %v", resp.Diagnostics)
+
+	var out environmentResourceModel
+	require.False(t, resp.State.Get(ctx, &out).HasError())
+	require.NotNil(t, out.Datadog)
+	assert.Equal(t, "synthetic-key", out.Datadog.APIKey.ValueString(), "api_key NOT overwritten by API")
+	assert.True(t, out.Datadog.Enabled.ValueBool())
+	assert.False(t, out.Datadog.SendLogs.ValueBool(), "send_logs reconciled from API")
+}
+
+func TestEnvironmentResource_WeekdayValidatorRejectsBadDay(t *testing.T) {
+	var resp validator.ListResponse
+	days := daysList(t, "FRIDAY", "funday")
+	weekdayListValidator{}.ValidateList(context.Background(), validator.ListRequest{
+		Path: path.Root("maintenance_windows"), ConfigValue: days,
+	}, &resp)
+	assert.True(t, resp.Diagnostics.HasError(), "lowercase/invalid weekday must be rejected")
 }
 
 func TestEnvironmentResource_Metadata(t *testing.T) {
