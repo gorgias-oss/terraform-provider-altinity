@@ -126,12 +126,12 @@ type NodeTypeRequest struct {
 	ExtraSpec    json.RawMessage `json:"extraSpec,omitempty"`
 }
 
-// scopeDefaultTolerations returns the tolerations the ACM UI sends for a node
+// ScopeDefaultTolerations returns the tolerations the ACM UI sends for a node
 // type of the given scope, so a Terraform-created node type behaves identically
 // to a UI-created one. clickhouse/system are live-confirmed (2026-06-10);
 // zookeeper is inferred by analogy with clickhouse.
 // TODO(spike): confirm the zookeeper-scope default from a UI capture (OQ-1).
-func scopeDefaultTolerations(scope string) json.RawMessage {
+func ScopeDefaultTolerations(scope string) json.RawMessage {
 	switch scope {
 	case "clickhouse":
 		return json.RawMessage(`[{"key":"dedicated","operator":"Equal","value":"clickhouse","effect":"NoSchedule"}]`)
