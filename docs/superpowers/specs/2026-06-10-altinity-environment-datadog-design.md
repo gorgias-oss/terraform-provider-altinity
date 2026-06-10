@@ -162,21 +162,32 @@ fields the operator configured"):
     typed struct `{Enabled bool; Key string; Region string; Metrics bool;
     Logs bool; TableStats bool}`.
   - `ApplyToClusters json.RawMessage` (`json:"applyToClusters,omitempty"`).
-  - `MaintenanceWindowSchedules []MaintenanceWindow` (`json:"maintenanceWindowSchedules,omitempty"`),
+  - `MaintenanceWindowSchedules *[]MaintenanceWindow` (`json:"maintenanceWindowSchedules,omitempty"`),
     where `MaintenanceWindow` is `{Name string; Enabled bool; Hour int;
-    LengthInHours int; Days []string}`.
-  - All `omitempty`, so an unmanaged feature is never sent (a deliberate empty
-    maintenance list needs care — pass a non-nil empty slice when the operator
-    sets `[]`; see §3a).
+    LengthInHours int; Days []string}`. **Pointer**, not a plain slice:
+    Go's `json` `omitempty` drops *any* `len==0` slice (nil or not), so a plain
+    slice can't distinguish "unmanaged" from "clear all". A `nil` pointer omits
+    the field (unmanaged); a non-nil pointer to an empty slice marshals `[]`
+    (clear). The resource sets the pointer only when `maintenance_windows` is
+    non-null in config.
+  - `DatadogSettings`/`ApplyToClusters` use `omitempty` (unmanaged → not sent).
 - Extend the domain `Environment` (and `environmentFromWire`) to surface both
-  configs read from `EnvironmentShow`. `datadogSettings` arrives as **object OR
-  string**, so decode via a small helper (`json.RawMessage` → unmarshal as
-  object; if that fails, unmarshal the string then the object). Do **not** carry
-  the API key into the domain (write-only). `maintenanceWindowSchedules` is an
-  array → decode to `[]MaintenanceWindow`.
-- `wire.Environment.DatadogSettings` is already `json.RawMessage` (opaque);
-  `maintenanceWindowSchedules` is likewise carried opaquely on the wire — the
-  coercion is hand-written in the domain layer (no specgen change needed).
+  configs read from `EnvironmentShow`:
+  - `datadogSettings` IS on `wire.Environment` (`json.RawMessage`). It arrives as
+    **object OR string**, so decode via a small helper (unmarshal as object; if
+    that fails, unmarshal the string then the object). Do **not** carry the API
+    key into the domain (write-only).
+  - `maintenanceWindowSchedules` is **NOT** a field on `wire.Environment` (only
+    `datadogSettings` is). So Read decodes it via a hand-written struct that
+    **embeds `wire.Environment`** and adds
+    `MaintenanceWindowSchedules json.RawMessage` — the same pattern as
+    `nodeTypeRaw` (which adds `used`/`*_alloc` to `wire.NodeType`). `GetEnvironmentByID`
+    decodes into that struct. No specgen change.
+  - **UNCONFIRMED (OQ-4):** the captures are `EnvironmentEdit` *requests*; we have
+    not verified that `EnvironmentShow` (GET) echoes `maintenanceWindowSchedules`.
+    If it does NOT, maintenance windows are config-preserved (like a write-only
+    field — keep the configured value, don't reconcile from the API). The Read
+    mapping must handle "field absent in GET" gracefully either way.
 
 ## 5. Testing
 
@@ -211,5 +222,14 @@ fields the operator configured"):
   clear all windows (vs. null = leave unmanaged)? And what timezone is `hour`
   in (UTC assumed)? Confirm during the live test; the design treats `[]` as
   "clear" and null as "unmanaged".
+- **OQ-4** Does `EnvironmentShow` (GET) return `maintenanceWindowSchedules`? If
+  not, treat the list as config-preserved (write-only-style). Confirm with a GET
+  after setting a window (read-only — capture it during the live test).
 
-None block implementation; all are confirmable during the live test.
+OQ-1/OQ-2/OQ-3 don't block implementation. OQ-4 affects the maintenance Read
+mapping (reconcile-from-API vs config-preserve) — the implementation handles
+"absent in GET" gracefully, so it doesn't block either, but confirm before
+finalizing the Read behavior. Also note: the existing `Update` runs unbounded on
+the parent context (only `Create` wraps a timeout); since these edits ride one
+`EnvironmentEdit` that's acceptable, but the plan should decide whether to bound
+`Update` by the update timeout for consistency.
