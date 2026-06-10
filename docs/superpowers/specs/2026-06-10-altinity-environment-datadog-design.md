@@ -1,20 +1,26 @@
-# Design: Datadog metrics configuration on `altinity_environment`
+# Design: Datadog metrics + maintenance windows on `altinity_environment`
 
 - **Status:** Draft (pending spec review + author sign-off)
 - **Date:** 2026-06-10
 - **Author:** Vianney Foucault (with Claude)
-- **Scope:** Add Datadog integration config to the existing `altinity_environment`
-  resource. **Maintenance windows are deferred** to a separate cycle (their
-  `EnvironmentEdit` payload shape — `maintenanceWindowSchedules` — has not been
-  captured yet).
+- **Scope:** Add two environment-config features to the existing
+  `altinity_environment` resource — the **Datadog integration** (`datadog {}`
+  block) and **maintenance windows** (`maintenance_windows` list). Both ride the
+  same `EnvironmentEdit` call the resource already uses for `display_name`; both
+  are now backed by live captures (2026-06-10, env 2293).
 
 ## 1. Goal
 
-Let operators configure an environment's **Datadog integration** (ship
-ClickHouse metrics/logs to Datadog) declaratively on `altinity_environment`, via
-a single optional nested `datadog {}` block. No new resource, no new endpoint —
-it rides on the `EnvironmentEdit` call the resource already uses for
-`display_name`.
+Let operators configure, on `altinity_environment` and declaratively:
+1. The environment's **Datadog integration** (ship ClickHouse metrics/logs to
+   Datadog) — a single optional nested `datadog {}` block.
+2. The environment's **maintenance windows** — an optional `maintenance_windows`
+   list.
+
+No new resource, no new endpoint — both ride the `EnvironmentEdit`
+(`POST /environment/{id}`) call the resource already uses for `display_name`,
+which merges a **minimal patch** server-side (proven by `displayName`-only and
+`maintenanceWindowSchedules`-only edits — see §2).
 
 ## 2. API findings (live, env 2293, 2026-06-10)
 
@@ -50,6 +56,27 @@ Key behaviors:
   string as the OpenAPI declares — noted but out of scope (this is the Datadog
   path, option A, not the metric-storage path).
 
+Maintenance windows (`EnvironmentEdit`, env 2293, minimal patch):
+
+```json
+{"id":"2293","maintenanceWindowSchedules":[
+  {"name":"Schedule_1","enabled":true,"hour":16,"lengthInHours":4,
+   "days":["FRIDAY","SATURDAY","THURSDAY"]}]}
+```
+→ response `{"data":{"status":"online","id":"2293"}}`.
+
+- `maintenanceWindowSchedules` is a real **array of objects** (despite the
+  OpenAPI declaring it `string`): `{name, enabled, hour (0–23), lengthInHours,
+  days:[UPPERCASE weekday]}`. `days` uses full uppercase names
+  (`MONDAY`…`SUNDAY`); window order/day order is not semantically meaningful.
+- The minimal `{id, maintenanceWindowSchedules}` POST succeeding **confirms the
+  partial-merge behavior** the Datadog path relies on.
+- **Server-side validation:** ACM rejects schedules that don't provide ≥48h over
+  any 32-day window (`maintenanceWindow "…": must provide ≥ 48h over any 32-day
+  window`). The provider does NOT recompute this — it surfaces ACM's error as a
+  diagnostic. No `applyToClusters` is sent for maintenance windows (the capture
+  omits it).
+
 ⚠️ **Fixtures:** the captured 26 KB payload contains real secrets (a GCP SA
 private key and a k8s client RSA key). Any test fixture for this work MUST be
 hand-written synthetic — never derived from the raw capture. (Reinforces the
@@ -78,58 +105,96 @@ hand-written synthetic — never derived from the raw capture. (Reinforces the
   state this in the attribute `Description`, as the user resource's `password`
   does.
 
+## 3a. Schema — `maintenance_windows` list on `altinity_environment`
+
+A `maintenance_windows` optional list of nested objects:
+
+| Attribute | Type | Mode | Wire (`maintenanceWindowSchedules[].*`) |
+|---|---|---|---|
+| `name` | string | Required-in-object | `name` |
+| `enabled` | bool | Optional (default true) | `enabled` |
+| `hour` | int | Required-in-object (0–23) | `hour` |
+| `length_hours` | int | Required-in-object | `lengthInHours` |
+| `days` | list(string) | Required-in-object | `days` (UPPERCASE weekdays) |
+
+- The whole `maintenance_windows` list is **Optional**; when absent, the resource
+  does not manage `maintenanceWindowSchedules` (never sends it). An empty list
+  `[]` is a meaningful "clear all windows" (sends `maintenanceWindowSchedules:[]`)
+  — vs. null = unmanaged. (Confirm `[]` semantics during the live test.)
+- `days` values are full uppercase weekday names (`MONDAY`…`SUNDAY`). A plan-time
+  validator rejects other values; order is not significant (compare as a set to
+  avoid spurious diffs, like `stringSlicesEqualUnordered` does elsewhere).
+- Plain (not Sensitive) — no secrets here.
+- The ≥48h/32-day rule is **not** enforced client-side; ACM's rejection surfaces
+  as a diagnostic.
+
 ## 4. Lifecycle integration
 
 The `altinity_environment` resource already has Create/Read/Update/Delete with
-`display_name` as the only mutable field. Datadog extends Create + Update + Read:
+`display_name` as the only mutable field. Both features extend Create + Update +
+Read the same way (`display_name`'s existing edit path generalizes to "send the
+fields the operator configured"):
 
-- **Create:** the request flow (`EnvironmentRequest`) can't set Datadog. So, as
-  with `display_name`, if a `datadog {}` block is configured, apply it via an
-  `EnvironmentEdit` follow-up after the environment is ready (reuse/extend the
-  existing post-create edit path).
-- **Update:** when the `datadog {}` block changes, send `datadogSettings` +
-  `applyToClusters` on `EnvironmentEdit` (together with `displayName`).
-- **Read:** `EnvironmentShow.datadogSettings` → map `enabled`/`region`/`send_*`
-  into the block; **do not** read `api_key` back (write-only). If the block is
-  unset in config, leave it null. NOTE: `applyEnvironmentToModel` is shared by
-  Create/Read/Update — it must overwrite only the non-secret datadog fields and
-  leave the model's existing `api_key` (and a null block) untouched, never doing
-  a naive full-block overwrite that would wipe the configured key.
-- **Delete:** unchanged (Datadog config lives on the env; deleting the env
-  removes it; no separate teardown).
+- **Create:** the request flow (`EnvironmentRequest`) can't set these. So, as with
+  `display_name`, if a `datadog {}` block and/or `maintenance_windows` are
+  configured, apply them via the **same** post-ready `EnvironmentEdit` follow-up
+  (one edit carrying all configured fields).
+- **Update:** when `datadog {}` and/or `maintenance_windows` change, send the
+  changed field(s) on `EnvironmentEdit` (with `displayName`): `datadogSettings` +
+  `applyToClusters` for Datadog, `maintenanceWindowSchedules` for windows.
+- **Read:**
+  - Datadog → `EnvironmentShow.datadogSettings` → map `enabled`/`region`/`send_*`;
+    **do not** read `api_key` back (write-only).
+  - Maintenance → `EnvironmentShow.maintenanceWindowSchedules` → map the list
+    (`days` compared as a set to avoid spurious diffs).
+  - If a block/list is unset in config, leave it null. NOTE:
+    `applyEnvironmentToModel` is shared by Create/Read/Update — it must overwrite
+    only the non-secret fields and leave the model's existing `api_key` (and any
+    null block/list) untouched, never doing a naive full overwrite that wipes the
+    configured key.
+- **Delete:** unchanged (both configs live on the env; deleting the env removes
+  them; no separate teardown).
 
 ### 4.1 ACM client + domain changes
 
-- Extend `acm.EnvironmentEditRequest` with `DatadogSettings *DatadogSettings`
-  (`json:"datadogSettings,omitempty"`) and `ApplyToClusters json.RawMessage`
-  (`json:"applyToClusters,omitempty"`), where `DatadogSettings` is a typed
-  struct `{Enabled bool; Key string; Region string; Metrics bool; Logs bool;
-  TableStats bool}`.
-- Extend the domain `Environment` (and `environmentFromWire`) to surface the
-  Datadog config read from `EnvironmentShow`. Because `datadogSettings` arrives
-  as **object OR string**, decode via a small helper (`json.RawMessage` →
-  unmarshal as object; if that fails, unmarshal the string then the object).
-  Do **not** carry the API key into the domain (write-only).
-- `wire.Environment.DatadogSettings` is already `json.RawMessage` (opaque) — the
+- Extend `acm.EnvironmentEditRequest` with:
+  - `DatadogSettings *DatadogSettings` (`json:"datadogSettings,omitempty"`), a
+    typed struct `{Enabled bool; Key string; Region string; Metrics bool;
+    Logs bool; TableStats bool}`.
+  - `ApplyToClusters json.RawMessage` (`json:"applyToClusters,omitempty"`).
+  - `MaintenanceWindowSchedules []MaintenanceWindow` (`json:"maintenanceWindowSchedules,omitempty"`),
+    where `MaintenanceWindow` is `{Name string; Enabled bool; Hour int;
+    LengthInHours int; Days []string}`.
+  - All `omitempty`, so an unmanaged feature is never sent (a deliberate empty
+    maintenance list needs care — pass a non-nil empty slice when the operator
+    sets `[]`; see §3a).
+- Extend the domain `Environment` (and `environmentFromWire`) to surface both
+  configs read from `EnvironmentShow`. `datadogSettings` arrives as **object OR
+  string**, so decode via a small helper (`json.RawMessage` → unmarshal as
+  object; if that fails, unmarshal the string then the object). Do **not** carry
+  the API key into the domain (write-only). `maintenanceWindowSchedules` is an
+  array → decode to `[]MaintenanceWindow`.
+- `wire.Environment.DatadogSettings` is already `json.RawMessage` (opaque);
+  `maintenanceWindowSchedules` is likewise carried opaquely on the wire — the
   coercion is hand-written in the domain layer (no specgen change needed).
 
 ## 5. Testing
 
 - `acm` unit tests: `EnvironmentEdit` body includes `datadogSettings` (exact
-  fields) + `applyToClusters:{datadog:true}`; the string-or-object decode helper
-  handles both response forms.
-- `provider` tests: schema/plan validation; Create-with-datadog issues the
-  follow-up edit; Update sends the changed settings; Read maps `enabled`/`region`/
-  `send_*` and leaves `api_key` as the configured (write-only) value; block-absent
-  → no `datadogSettings` sent.
-- Fixtures: hand-written synthetic `datadogSettings` (no real keys).
+  fields) + `applyToClusters:{datadog:true}`; `maintenanceWindowSchedules` array
+  shape; the string-or-object datadog decode helper handles both response forms.
+- `provider` tests: schema/plan validation (incl. the weekday validator);
+  Create-with-datadog/-windows issues the follow-up edit; Update sends the
+  changed settings; Read maps non-secret datadog fields + the windows list and
+  leaves `api_key` as the configured value; block/list absent → not sent; a
+  server-side maintenance rejection (≥48h rule) surfaces as a diagnostic.
+- Fixtures: hand-written synthetic (no real keys) — the captures contained real
+  GCP/k8s secrets.
 
 ## 6. Out of scope / deferred
 
-- **Maintenance windows** (`maintenanceWindowSchedules`) — separate spec; needs a
-  UI capture of that edit payload.
 - `datadogPassword` (Datadog app key), `metricStorage`, `logsStorage`,
-  `logsOptions` — not part of "Datadog metrics" (option A).
+  `logsOptions` — not part of this work (option A was Datadog metrics).
 
 ## 7. Open questions
 
@@ -142,4 +207,9 @@ The `altinity_environment` resource already has Create/Read/Update/Delete with
   "update flags without re-sending the key" — out of scope (we always send the
   full block).
 
-Neither blocks implementation; both are confirmable during the live test.
+- **OQ-3** Maintenance windows: does sending `maintenanceWindowSchedules:[]`
+  clear all windows (vs. null = leave unmanaged)? And what timezone is `hour`
+  in (UTC assumed)? Confirm during the live test; the design treats `[]` as
+  "clear" and null as "unmanaged".
+
+None block implementation; all are confirmable during the live test.
