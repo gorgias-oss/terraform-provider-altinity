@@ -5,7 +5,7 @@ provider "registry.terraform.io/gorgias/altinity" {
   version     = "0.1.0"
   constraints = ">= 0.1.0"
   hashes = [
-    "h1:JkcT9jzKCRP4TKajTvWMzuWG7FAVTkcdDKh3mmyKBjI=",
+    "h1:mOaaKM8vhY5uwz2GGxJg+bmkxypeVHwFQdSPj/7BAkU=",
   ]
 }
 
