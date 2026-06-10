@@ -160,7 +160,11 @@
   // response: {"data":{"zones":[...],"instanceTypes":[{"name","cpu","cpuAllocatable","mem","memAllocatable"}]}}
   func (c *Client) ListInstanceTypes(ctx, provider, region string) (zones []string, types []InstanceType, err error)
   ```
-  Query: `type=*`, `platform=provider`, `region=region`. Decode `mem`→Memory.
+  Query: `type=*`, `platform=<provider>`, `region=<region>`. Decode `mem`→Memory.
+  **NOTE:** this endpoint keys on **`platform=`** (per the live capture), NOT
+  `provider=` like the existing `ListCloudOptionsGlobal` regions call — do not
+  copy that method's `provider=` key. `out` decodes the unwrapped `data` as a
+  struct `{Zones []string; InstanceTypes []InstanceType}`.
 
 - [ ] **Step 4:** Run, verify PASS.
 - [ ] **Step 5:** Commit: `feat(acm): add ListInstanceTypes (available instance catalog)`.
