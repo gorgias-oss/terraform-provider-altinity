@@ -103,6 +103,10 @@ var allowedOps = []string{
 	"ClickhouseKeeperEdit",   // POST   /environment/{environment}/keeper/{name}
 	"ClickhouseKeeperDelete", // DELETE /environment/{environment}/keeper/{name}
 	"ClickhouseKeeperStatus", // GET    /environment/{environment}/keeper/{name}/status
+	// Node type management (altinity_node_type resource).
+	"NodeTypeAdd",    // POST   /environment/{environment}/nodetypes
+	"NodeTypeEdit",   // POST   /nodetype/{id}
+	"NodeTypeRemove", // DELETE /nodetype/{id}
 	// Environment + node-type + version discovery.
 	"EnvironmentList", // GET /environments
 	"NodeTypeList",    // GET /environment/{environment}/nodetypes
