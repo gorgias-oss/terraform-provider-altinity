@@ -219,6 +219,53 @@ type Environment struct {
 	State          string
 	IDOwner        int64
 	IDParent       int64
+
+	// Datadog is the environment's Datadog integration config, read from
+	// EnvironmentShow.datadogSettings. nil when unset. The API key is
+	// deliberately NOT carried here (write-only at the resource layer).
+	Datadog *DatadogConfig
+	// MaintenanceWindows is read from EnvironmentShow.maintenanceWindowSchedules
+	// (decoded in GetEnvironmentByID, not environmentFromWire — the field is not
+	// on the wire.Environment struct). nil when unset / not echoed by GET.
+	MaintenanceWindows []MaintenanceWindow
+}
+
+// DatadogConfig is the non-secret read view of datadogSettings (the API key is
+// write-only and never surfaced here).
+type DatadogConfig struct {
+	Enabled    bool
+	Region     string
+	Metrics    bool
+	Logs       bool
+	TableStats bool
+}
+
+// datadogConfigFromRaw decodes the env's datadogSettings, which ACM returns as
+// EITHER a JSON object (EnvironmentShow) or a stringified JSON object
+// (EnvironmentEdit response). Returns nil for empty/null/disabled-with-no-data.
+func datadogConfigFromRaw(raw json.RawMessage) *DatadogConfig {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var dd struct {
+		Enabled    bool   `json:"enabled"`
+		Region     string `json:"region"`
+		Metrics    bool   `json:"metrics"`
+		Logs       bool   `json:"logs"`
+		TableStats bool   `json:"tableStats"`
+	}
+	// Try as an object first; if that fails, the value is a JSON string holding
+	// the object — unwrap the string, then decode.
+	if err := json.Unmarshal(raw, &dd); err != nil {
+		var s string
+		if serr := json.Unmarshal(raw, &s); serr != nil || s == "" {
+			return nil
+		}
+		if err := json.Unmarshal([]byte(s), &dd); err != nil {
+			return nil
+		}
+	}
+	return &DatadogConfig{Enabled: dd.Enabled, Region: dd.Region, Metrics: dd.Metrics, Logs: dd.Logs, TableStats: dd.TableStats}
 }
 
 // NodeType is the clean domain view of an environment node type
@@ -385,6 +432,7 @@ func environmentFromWire(w *wire.Environment) (Environment, error) {
 	e.Domain = w.Domain
 	e.Status = w.Status
 	e.State = w.State
+	e.Datadog = datadogConfigFromRaw(w.DatadogSettings)
 	return e, nil
 }
 

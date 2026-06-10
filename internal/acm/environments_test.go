@@ -127,6 +127,52 @@ func TestEditEnvironment(t *testing.T) {
 	assert.Equal(t, "New Name", e.DisplayName)
 }
 
+func TestDatadogConfigFromRaw_ObjectAndString(t *testing.T) {
+	obj := datadogConfigFromRaw(json.RawMessage(`{"enabled":true,"region":"datadoghq.com","metrics":true,"logs":false,"tableStats":true,"key":"shouldbeignored"}`))
+	require.NotNil(t, obj)
+	assert.True(t, obj.Enabled)
+	assert.Equal(t, "datadoghq.com", obj.Region)
+	assert.True(t, obj.Metrics)
+	assert.False(t, obj.Logs)
+	assert.True(t, obj.TableStats)
+
+	// Stringified object (EnvironmentEdit response form).
+	str := datadogConfigFromRaw(json.RawMessage(`"{\"enabled\":true,\"region\":\"datadoghq.eu\",\"metrics\":false,\"logs\":true,\"tableStats\":false}"`))
+	require.NotNil(t, str)
+	assert.Equal(t, "datadoghq.eu", str.Region)
+	assert.True(t, str.Logs)
+
+	assert.Nil(t, datadogConfigFromRaw(nil))
+	assert.Nil(t, datadogConfigFromRaw(json.RawMessage(`null`)))
+}
+
+func TestGetEnvironmentByID_DecodesObservability(t *testing.T) {
+	client := serveFixtureClient(t, "testdata/environment_show_observability.json", nil)
+	env, err := client.GetEnvironmentByID(context.Background(), 2293)
+	require.NoError(t, err)
+
+	require.NotNil(t, env.Datadog)
+	assert.True(t, env.Datadog.Enabled)
+	assert.Equal(t, "datadoghq.com", env.Datadog.Region)
+	assert.True(t, env.Datadog.Metrics)
+
+	require.Len(t, env.MaintenanceWindows, 1)
+	assert.Equal(t, "w1", env.MaintenanceWindows[0].Name)
+	assert.Equal(t, 16, env.MaintenanceWindows[0].Hour)
+	assert.Equal(t, []string{"FRIDAY", "SATURDAY"}, env.MaintenanceWindows[0].Days)
+}
+
+func TestGetEnvironmentByID_NoMaintenanceWindows(t *testing.T) {
+	// environment_show.json has a (disabled) datadogSettings but NO
+	// maintenanceWindowSchedules — the latter must decode to nil gracefully.
+	client := serveFixtureClient(t, "testdata/environment_show.json", nil)
+	env, err := client.GetEnvironmentByID(context.Background(), 641)
+	require.NoError(t, err)
+	assert.Nil(t, env.MaintenanceWindows)
+	require.NotNil(t, env.Datadog)
+	assert.False(t, env.Datadog.Enabled)
+}
+
 func TestEditEnvironment_DatadogAndMaintenance(t *testing.T) {
 	var body map[string]any
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

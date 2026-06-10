@@ -117,16 +117,38 @@ func (c *Client) RequestEnvironment(ctx context.Context, req EnvironmentRequest)
 	return environmentFromWire(&w)
 }
 
+// environmentRaw decodes an EnvironmentShow response. It embeds the generated
+// wire type and adds maintenanceWindowSchedules, which is NOT a field on the
+// generated wire.Environment (the OpenAPI Environment schema omits it) — the
+// same embedding trick as nodeTypeRaw.
+type environmentRaw struct {
+	wire.Environment
+	MaintenanceWindowSchedules json.RawMessage `json:"maintenanceWindowSchedules"`
+}
+
 // GetEnvironmentByID reads a single environment by its ACM id
 // (GET /environment/{id}). A 404 is surfaced as an *APIError so callers can use
 // IsNotFound for drift / delete-confirmation.
 func (c *Client) GetEnvironmentByID(ctx context.Context, id int64) (Environment, error) {
-	var w wire.Environment
+	var r environmentRaw
 	args := map[string]string{"id": strconv.FormatInt(id, 10)}
-	if err := c.doJSON(ctx, wire.OpEnvironmentShow, args, nil, &w); err != nil {
+	if err := c.doJSON(ctx, wire.OpEnvironmentShow, args, nil, &r); err != nil {
 		return Environment{}, err
 	}
-	return environmentFromWire(&w)
+	env, err := environmentFromWire(&r.Environment)
+	if err != nil {
+		return Environment{}, err
+	}
+	// maintenanceWindowSchedules is decoded here (not in environmentFromWire)
+	// because it is not part of the wire.Environment struct. Absent/null → leave
+	// nil (unmanaged / not echoed by GET, see OQ-4).
+	if len(r.MaintenanceWindowSchedules) > 0 && string(r.MaintenanceWindowSchedules) != "null" {
+		var mws []MaintenanceWindow
+		if uerr := json.Unmarshal(r.MaintenanceWindowSchedules, &mws); uerr == nil {
+			env.MaintenanceWindows = mws
+		}
+	}
+	return env, nil
 }
 
 // EditEnvironment updates an environment by id (POST /environment/{id}). The
