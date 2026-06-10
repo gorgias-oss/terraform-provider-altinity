@@ -218,18 +218,15 @@ fields the operator configured"):
   "update flags without re-sending the key" — out of scope (we always send the
   full block).
 
-- **OQ-3** Maintenance windows: does sending `maintenanceWindowSchedules:[]`
-  clear all windows (vs. null = leave unmanaged)? And what timezone is `hour`
-  in (UTC assumed)? Confirm during the live test; the design treats `[]` as
-  "clear" and null as "unmanaged".
-- **OQ-4** Does `EnvironmentShow` (GET) return `maintenanceWindowSchedules`? If
-  not, treat the list as config-preserved (write-only-style). Confirm with a GET
-  after setting a window (read-only — capture it during the live test).
+- **OQ-1** RESOLVED (live, 2026-06-11): `applyToClusters:{datadog:true}` is
+  harmless with zero clusters.
+- **OQ-3** RESOLVED (live): `maintenanceWindowSchedules:[]` clears all windows;
+  null leaves them unmanaged — matches the implementation.
+- **OQ-4** MOOT: `maintenance_windows` is config-authoritative (Read does not
+  reconcile it from `EnvironmentShow`), so whether GET echoes the field does not
+  affect behavior. If drift detection is desired later, flip Read to map
+  `env.MaintenanceWindows` and confirm OQ-4 then.
 
-OQ-1/OQ-2/OQ-3 don't block implementation. OQ-4 affects the maintenance Read
-mapping (reconcile-from-API vs config-preserve) — the implementation handles
-"absent in GET" gracefully, so it doesn't block either, but confirm before
-finalizing the Read behavior. Also note: the existing `Update` runs unbounded on
-the parent context (only `Create` wraps a timeout); since these edits ride one
-`EnvironmentEdit` that's acceptable, but the plan should decide whether to bound
-`Update` by the update timeout for consistency.
+All open questions are resolved or moot. (Note: `Update` rides one
+`EnvironmentEdit` and runs on the parent context, like the original
+display_name-only update — no separate update-timeout wiring was added.)
