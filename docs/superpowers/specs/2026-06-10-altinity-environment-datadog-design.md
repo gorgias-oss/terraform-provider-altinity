@@ -69,9 +69,14 @@ hand-written synthetic — never derived from the raw capture. (Reinforces the
 
 - The whole `datadog` block is **Optional**. When absent, the resource does not
   manage `datadogSettings` at all (never sends it).
-- `api_key` is `Sensitive`; **write-only**: sent on create/update, never read
-  back from the API, preserved from config/state — same pattern as cluster
-  `admin_password` / clickhouse_user `password`.
+- `api_key` is `Sensitive`; **write-only** in the codebase's existing sense —
+  plain `Optional + Sensitive` with manual state-preservation (NOT the
+  terraform-plugin-framework `WriteOnly` attribute flag). Sent on create/update,
+  never read back from the API, preserved from config/state — same mechanism as
+  cluster `admin_password` / clickhouse_user `password`. Consequently `api_key`
+  is **excluded from drift detection** (an out-of-band key change isn't noticed);
+  state this in the attribute `Description`, as the user resource's `password`
+  does.
 
 ## 4. Lifecycle integration
 
@@ -86,7 +91,10 @@ The `altinity_environment` resource already has Create/Read/Update/Delete with
   `applyToClusters` on `EnvironmentEdit` (together with `displayName`).
 - **Read:** `EnvironmentShow.datadogSettings` → map `enabled`/`region`/`send_*`
   into the block; **do not** read `api_key` back (write-only). If the block is
-  unset in config, leave it null.
+  unset in config, leave it null. NOTE: `applyEnvironmentToModel` is shared by
+  Create/Read/Update — it must overwrite only the non-secret datadog fields and
+  leave the model's existing `api_key` (and a null block) untouched, never doing
+  a naive full-block overwrite that would wipe the configured key.
 - **Delete:** unchanged (Datadog config lives on the env; deleting the env
   removes it; no separate teardown).
 
