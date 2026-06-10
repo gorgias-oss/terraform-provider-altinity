@@ -46,10 +46,13 @@ output "keeper_instance_type_codes" {
 
 Read-Only:
 
+- `capacity` (Number) Max nodes of this type.
 - `code` (String) Instance type code (use as instance_type/node_type).
 - `cpu` (Number)
+- `id` (String) ACM node type id (use as altinity_node_type import id component).
 - `is_spot` (Boolean)
 - `memory` (Number) Memory in MB.
 - `name` (String)
 - `scope` (String) clickhouse | zookeeper | system.
 - `storage_class` (String)
+- `used` (Boolean) True when a cluster currently uses this node type.
