@@ -229,6 +229,7 @@ func (p *altinityProvider) DataSources(_ context.Context) []func() datasource.Da
 func (p *altinityProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewEnvironmentResource,    // altinity_environment
+		NewNodeTypeResource,       // altinity_node_type
 		NewClusterResource,        // altinity_clickhouse_cluster
 		NewKeeperResource,         // altinity_clickhouse_keeper
 		NewUserResource,           // altinity_clickhouse_user

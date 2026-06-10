@@ -64,7 +64,7 @@ func TestCreateNodeType_ClickhouseSendsScopeDefaultToleration(t *testing.T) {
 		CPU:          24,
 		Memory:       80160,
 		Capacity:     10,
-		Tolerations:  scopeDefaultTolerations("clickhouse"),
+		Tolerations:  ScopeDefaultTolerations("clickhouse"),
 		NodeSelector: json.RawMessage(`""`),
 		ExtraSpec:    json.RawMessage(`""`),
 	})
@@ -86,12 +86,12 @@ func TestCreateNodeType_ClickhouseSendsScopeDefaultToleration(t *testing.T) {
 
 func TestScopeDefaultTolerations(t *testing.T) {
 	var ck []map[string]string
-	require.NoError(t, json.Unmarshal(scopeDefaultTolerations("clickhouse"), &ck))
+	require.NoError(t, json.Unmarshal(ScopeDefaultTolerations("clickhouse"), &ck))
 	require.Len(t, ck, 1)
 	assert.Equal(t, "clickhouse", ck[0]["value"])
 
 	var sys []map[string]string
-	require.NoError(t, json.Unmarshal(scopeDefaultTolerations("system"), &sys))
+	require.NoError(t, json.Unmarshal(ScopeDefaultTolerations("system"), &sys))
 	assert.Empty(t, sys)
 }
 
