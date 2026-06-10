@@ -1,0 +1,7 @@
+{
+  "data": [
+    {"id":"14134","scope":"clickhouse","code":"n2d-standard-2","name":"n2d-standard-2","storageClass":null,"cpu":"2","memory":"6001","id_environment":"2293","extraSpec":null,"tolerations":[{"key":"dedicated","operator":"Equal","value":"clickhouse","effect":"NoSchedule"}],"nodeSelector":[],"capacity":"10","isSpot":false,"cpu_alloc":"2","memory_alloc":"6001","used":false},
+    {"id":"14138","scope":"clickhouse","code":"n2d-standard-32","name":"n2d-standard-32","storageClass":null,"cpu":"32","memory":"117494","id_environment":"2293","extraSpec":null,"tolerations":[{"key":"dedicated","operator":"Equal","value":"clickhouse","effect":"NoSchedule"}],"nodeSelector":[],"capacity":"10","isSpot":false,"cpu_alloc":"32","memory_alloc":"117494","used":true},
+    {"id":"14133","scope":"zookeeper","code":"e2-standard-2","name":"e2-standard-2","storageClass":null,"cpu":"2","memory":"6001","id_environment":"2293","extraSpec":null,"tolerations":[],"nodeSelector":[],"capacity":"10","isSpot":false,"cpu_alloc":"2","memory_alloc":"6001","used":false}
+  ]
+}
