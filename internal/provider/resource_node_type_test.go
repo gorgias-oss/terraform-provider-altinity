@@ -46,6 +46,15 @@ func newNodeTypeState(t *testing.T, s rschema.Schema, m nodeTypeResourceModel) t
 	return st
 }
 
+func newNodeTypeConfig(t *testing.T, s rschema.Schema, m nodeTypeResourceModel) tfsdk.Config {
+	t.Helper()
+	ctx := context.Background()
+	// tfsdk.Config has no Set(); marshal the model via a Plan and reuse its Raw.
+	pl := tfsdk.Plan{Schema: s, Raw: emptyObjectValue(ctx, s)}
+	require.False(t, pl.Set(ctx, &m).HasError())
+	return tfsdk.Config{Schema: s, Raw: pl.Raw}
+}
+
 // freshNodeTypePlan: a create plan (clickhouse, all computed unknown).
 func freshNodeTypePlan() nodeTypeResourceModel {
 	return nodeTypeResourceModel{
@@ -95,7 +104,8 @@ func TestNodeTypeResource_CreateFresh(t *testing.T) {
 	s := nodeTypeSchema(t)
 	ctx := context.Background()
 
-	req := resource.CreateRequest{Plan: newNodeTypePlan(t, s, freshNodeTypePlan())}
+	cfg := freshNodeTypePlan()
+	req := resource.CreateRequest{Plan: newNodeTypePlan(t, s, cfg), Config: newNodeTypeConfig(t, s, cfg)}
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
 	r.Create(ctx, req, &resp)
 	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
@@ -139,7 +149,7 @@ func TestNodeTypeResource_CreateWithNameDoesFollowUpEdit(t *testing.T) {
 
 	plan := freshNodeTypePlan()
 	plan.Name = types.StringValue("my-pool")
-	req := resource.CreateRequest{Plan: newNodeTypePlan(t, s, plan)}
+	req := resource.CreateRequest{Plan: newNodeTypePlan(t, s, plan), Config: newNodeTypeConfig(t, s, plan)}
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
 	r.Create(ctx, req, &resp)
 	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
@@ -174,7 +184,7 @@ func TestNodeTypeResource_CreateAdopts(t *testing.T) {
 	plan.Code = types.StringValue("n2d-standard-32") // present in fixture (id 14138)
 	plan.CPU = types.Float64Value(32)
 	plan.Memory = types.Int64Value(117494)
-	req := resource.CreateRequest{Plan: newNodeTypePlan(t, s, plan)}
+	req := resource.CreateRequest{Plan: newNodeTypePlan(t, s, plan), Config: newNodeTypeConfig(t, s, plan)}
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
 	r.Create(ctx, req, &resp)
 	require.False(t, resp.Diagnostics.HasError(), "create diags: %v", resp.Diagnostics)
@@ -216,7 +226,7 @@ func TestNodeTypeResource_UpdatePreservesTolerations(t *testing.T) {
 	plan.Name = types.StringValue("n2d-standard-32")
 	plan.Used = types.BoolValue(true)
 
-	req := resource.UpdateRequest{Plan: newNodeTypePlan(t, s, plan)}
+	req := resource.UpdateRequest{Plan: newNodeTypePlan(t, s, plan), Config: newNodeTypeConfig(t, s, plan)}
 	resp := resource.UpdateResponse{State: newNodeTypeState(t, s, plan)}
 	r.Update(ctx, req, &resp)
 	require.False(t, resp.Diagnostics.HasError(), "update diags: %v", resp.Diagnostics)
