@@ -22,6 +22,22 @@ Tolerations, nodeSelector, and extraSpec are NOT managed by this resource: on cr
 # provider mirrors the ACM UI's per-scope default tolerations, and on update it
 # preserves whatever ACM has. `used` is read-only (true when a cluster uses it).
 
+
+# Resolve an existing Altinity.Cloud environment by name. The computed `id` is
+# what the altinity_clickhouse_cluster resource's `environment` argument expects.
+
+variable "altinity_environment" {
+  type = string
+}
+
+data "altinity_environment" "this" {
+  name = var.altinity_environment
+}
+
+output "environment_id" {
+  value = data.altinity_environment.this.id
+}
+
 # Discover the available instance types for the environment's provider+region.
 data "altinity_instance_types" "gcp" {
   cloud_provider = "gcp"
@@ -34,13 +50,13 @@ locals {
 }
 
 resource "altinity_node_type" "clickhouse_16" {
-  environment = altinity_environment.example.id
+  environment = data.altinity_environment.this.id
   scope       = "clickhouse"
   code        = local.chosen.name
   cpu         = local.chosen.cpu
   memory      = local.chosen.memory * 1024 # data source is GiB; node type wants MB
   capacity    = 10
-  # name     = "analytics-pool" # optional; applied via a follow-up edit
+  name     = "analytics-pool" # optional; applied via a follow-up edit
 }
 ```
 
@@ -50,9 +66,9 @@ resource "altinity_node_type" "clickhouse_16" {
 ### Required
 
 - `code` (String) Instance type code (see the altinity_instance_types data source). Editable in place.
-- `cpu` (Number) vCPUs for this node type.
+- `cpu` (Number) vCPUs for this node type (from the altinity_instance_types catalog).
 - `environment` (String) ACM environment id the node type belongs to.
-- `memory` (Number) Memory in MB for this node type.
+- `memory` (Number) Memory in MB for this node type (from the altinity_instance_types catalog). Sent to ACM as the requested size; ACM uses its own code-derived allocatable internally, but Terraform tracks the value you declare here.
 - `scope` (String) Node type scope: clickhouse, zookeeper, or system.
 
 ### Optional

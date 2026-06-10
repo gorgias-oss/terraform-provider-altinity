@@ -36,11 +36,38 @@ data "altinity_regions" "gcp" {
   cloud_provider = "gcp"
 }
 
+variable "datadog_api_key" {
+  type      = string
+  sensitive = true
+}
+
 resource "altinity_environment" "example" {
   name           = "gorgias-tf-demo-env"
   cloud_provider = "gcp"
   region         = "us-east1" # or e.g. data.altinity_regions.gcp.regions[0].code
   display_name   = "Terraform Demo"
+
+  # Datadog integration. `api_key` is write-only (sent, never read back, excluded
+  # from drift detection). Omit the whole block to leave Datadog unmanaged.
+  datadog = {
+    enabled          = true
+    api_key          = var.datadog_api_key
+    region           = "datadoghq.com"
+    send_metrics     = true
+    send_logs        = true
+    send_table_stats = false
+    # apply_to_clusters defaults to true.
+  }
+
+  # Maintenance windows. ACM requires >= 48h over any 32-day window. Omit (null)
+  # to leave unmanaged; set `[]` to clear all. Days are uppercase weekdays.
+  maintenance_windows = [{
+    name         = "weekend"
+    enabled      = true
+    hour         = 16
+    length_hours = 8
+    days         = ["FRIDAY", "SATURDAY", "SUNDAY"]
+  }]
 
   # `timeouts` is a nested attribute (note the `=`), not a block.
   timeouts = {
@@ -49,8 +76,9 @@ resource "altinity_environment" "example" {
   }
 }
 
-output "altinity_regions" {
-  value = data.altinity_regions.gcp.regions
+output "altinity_env" {
+  value     = altinity_environment.example
+  sensitive = true # the resource now carries the write-only datadog api_key
 }
 ```
 
@@ -65,7 +93,9 @@ output "altinity_regions" {
 
 ### Optional
 
+- `datadog` (Attributes) Datadog integration for the environment (ship ClickHouse metrics/logs to Datadog). Omit the block to leave Datadog unmanaged. (see [below for nested schema](#nestedatt--datadog))
 - `display_name` (String) Human-readable display name. The request endpoint cannot set it, so when specified the provider applies it via an edit immediately after the environment is ready. Defaults to the environment name.
+- `maintenance_windows` (Attributes List) Maintenance windows for the environment. ACM requires the windows to provide at least 48h over any 32-day window (rejected server-side otherwise). Omit (null) to leave unmanaged; set `[]` to clear all windows. Not reconciled against the API on read. (see [below for nested schema](#nestedatt--maintenance_windows))
 - `timeouts` (Attributes) Operation timeouts (Go duration strings). create defaults to 45m, delete to 30m. (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
@@ -76,6 +106,32 @@ output "altinity_regions" {
 - `state` (String) Environment state.
 - `status` (String) Environment status (e.g. online once ready).
 - `type` (String) Environment type (e.g. kubernetes).
+
+<a id="nestedatt--datadog"></a>
+### Nested Schema for `datadog`
+
+Optional:
+
+- `api_key` (String, Sensitive) Datadog API key. Write-only: sent on apply, never read back from the API, and excluded from drift detection (an out-of-band change is not noticed).
+- `apply_to_clusters` (Boolean) Push the Datadog config to the environment's clusters (applyToClusters). Defaults to true.
+- `enabled` (Boolean) Whether the Datadog integration is enabled.
+- `region` (String) Datadog site, e.g. datadoghq.com (default) or datadoghq.eu.
+- `send_logs` (Boolean)
+- `send_metrics` (Boolean)
+- `send_table_stats` (Boolean)
+
+
+<a id="nestedatt--maintenance_windows"></a>
+### Nested Schema for `maintenance_windows`
+
+Required:
+
+- `days` (List of String) Weekdays (uppercase): MONDAY…SUNDAY.
+- `enabled` (Boolean)
+- `hour` (Number) Start hour, 0–23 (UTC).
+- `length_hours` (Number) Window length in hours.
+- `name` (String)
+
 
 <a id="nestedatt--timeouts"></a>
 ### Nested Schema for `timeouts`
