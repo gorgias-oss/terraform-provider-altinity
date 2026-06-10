@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Versioned pre-commit hook. Enable once per clone with `make install-hooks`
+# (sets core.hooksPath=.githooks). Blocks commits that contain likely secrets
+# or unredacted production data.
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/check-secrets.sh"
