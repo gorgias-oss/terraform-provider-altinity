@@ -41,7 +41,7 @@ func TestProvider_SchemaHasTokenAndURL(t *testing.T) {
 func TestProvider_RegistersDataSources(t *testing.T) {
 	p := New("dev")()
 	dsFactories := p.DataSources(context.Background())
-	require.Len(t, dsFactories, 8) // environment, node_types, versions, storage_classes, zones, regions, clickhouse_profiles, clickhouse_profile
+	require.Len(t, dsFactories, 9) // environment, node_types, versions, storage_classes, zones, regions, instance_types, clickhouse_profiles, clickhouse_profile
 
 	want := map[string]bool{
 		"altinity_environment":         false,
@@ -50,6 +50,7 @@ func TestProvider_RegistersDataSources(t *testing.T) {
 		"altinity_storage_classes":     false,
 		"altinity_zones":               false,
 		"altinity_regions":             false,
+		"altinity_instance_types":      false,
 		"altinity_clickhouse_profiles": false,
 		"altinity_clickhouse_profile":  false,
 	}
