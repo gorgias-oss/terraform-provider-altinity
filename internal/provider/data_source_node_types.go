@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -38,13 +39,16 @@ type nodeTypesDataSourceModel struct {
 }
 
 type nodeTypeItemModel struct {
+	ID           types.String  `tfsdk:"id"`
 	Code         types.String  `tfsdk:"code"`
 	Name         types.String  `tfsdk:"name"`
 	Scope        types.String  `tfsdk:"scope"`
 	CPU          types.Float64 `tfsdk:"cpu"`
 	Memory       types.Int64   `tfsdk:"memory"`
+	Capacity     types.Int64   `tfsdk:"capacity"`
 	StorageClass types.String  `tfsdk:"storage_class"`
 	IsSpot       types.Bool    `tfsdk:"is_spot"`
+	Used         types.Bool    `tfsdk:"used"`
 }
 
 func (d *nodeTypesDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -70,13 +74,16 @@ func (d *nodeTypesDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 				Description: "The matching node types.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
+						"id":            schema.StringAttribute{Computed: true, Description: "ACM node type id (use as altinity_node_type import id component)."},
 						"code":          schema.StringAttribute{Computed: true, Description: "Instance type code (use as instance_type/node_type)."},
 						"name":          schema.StringAttribute{Computed: true},
 						"scope":         schema.StringAttribute{Computed: true, Description: "clickhouse | zookeeper | system."},
 						"cpu":           schema.Float64Attribute{Computed: true},
 						"memory":        schema.Int64Attribute{Computed: true, Description: "Memory in MB."},
+						"capacity":      schema.Int64Attribute{Computed: true, Description: "Max nodes of this type."},
 						"storage_class": schema.StringAttribute{Computed: true},
 						"is_spot":       schema.BoolAttribute{Computed: true},
+						"used":          schema.BoolAttribute{Computed: true, Description: "True when a cluster currently uses this node type."},
 					},
 				},
 			},
@@ -119,13 +126,16 @@ func (d *nodeTypesDataSource) Read(ctx context.Context, req datasource.ReadReque
 			continue
 		}
 		cfg.NodeTypes = append(cfg.NodeTypes, nodeTypeItemModel{
+			ID:           types.StringValue(strconv.FormatInt(nt.ID, 10)),
 			Code:         types.StringValue(nt.Code),
 			Name:         types.StringValue(nt.Name),
 			Scope:        types.StringValue(nt.Scope),
 			CPU:          types.Float64Value(nt.CPU),
 			Memory:       types.Int64Value(nt.Memory),
+			Capacity:     types.Int64Value(nt.Capacity),
 			StorageClass: types.StringValue(nt.StorageClass),
 			IsSpot:       types.BoolValue(nt.IsSpot),
+			Used:         types.BoolValue(nt.Used),
 		})
 	}
 

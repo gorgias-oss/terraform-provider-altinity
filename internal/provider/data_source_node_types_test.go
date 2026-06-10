@@ -36,9 +36,9 @@ func TestNodeTypesDataSource_ReadFiltersByScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[
-			{"code":"n2d-standard-2","scope":"clickhouse","cpu":"2","memory":"6001","isSpot":false},
-			{"code":"e2-standard-2","scope":"zookeeper","cpu":"2","memory":"6001","isSpot":false},
-			{"code":"e2-standard-2","scope":"system","cpu":"2","memory":"6001"}
+			{"id":"1","code":"n2d-standard-2","scope":"clickhouse","cpu":"2","memory":"6001","capacity":"10","isSpot":false,"used":true},
+			{"id":"2","code":"e2-standard-2","scope":"zookeeper","cpu":"2","memory":"6001","capacity":"10","isSpot":false,"used":false},
+			{"id":"3","code":"e2-standard-2","scope":"system","cpu":"2","memory":"6001"}
 		]}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -68,4 +68,8 @@ func TestNodeTypesDataSource_ReadFiltersByScope(t *testing.T) {
 	assert.Equal(t, "zookeeper", out.NodeTypes[0].Scope.ValueString())
 	assert.Equal(t, float64(2), out.NodeTypes[0].CPU.ValueFloat64())
 	assert.Equal(t, int64(6001), out.NodeTypes[0].Memory.ValueInt64())
+	// Enhancement: id, capacity, used surfaced.
+	assert.Equal(t, "2", out.NodeTypes[0].ID.ValueString())
+	assert.Equal(t, int64(10), out.NodeTypes[0].Capacity.ValueInt64())
+	assert.False(t, out.NodeTypes[0].Used.ValueBool())
 }
