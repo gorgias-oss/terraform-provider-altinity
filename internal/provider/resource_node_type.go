@@ -218,6 +218,10 @@ func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	// The create/adopt response carries the real ACM id; NodeTypeEdit's response
+	// does NOT, so capture it here and restore it after any follow-up edit.
+	createdID := nt.ID
+
 	// ACM ignores `name` on create (the created name equals the code). If the
 	// operator set a different name, apply it via a follow-up edit — carrying the
 	// just-created opaque fields and authoritative sizing, and the operator's
@@ -243,6 +247,12 @@ func (r *nodeTypeResource) Create(ctx context.Context, req resource.CreateReques
 			return
 		}
 		nt = edited
+	}
+
+	// NodeTypeEdit omits the id in its response; without this the resource would
+	// store node_type_id=0 and never find itself on Read (endless recreation).
+	if nt.ID == 0 {
+		nt.ID = createdID
 	}
 
 	applyNodeTypeToModel(&plan, nt)
@@ -283,19 +293,20 @@ func (r *nodeTypeResource) findNodeType(ctx context.Context, state nodeTypeResou
 	if err != nil {
 		return acm.NodeType{}, false, err
 	}
-	wantID, hasID := int64(0), false
+	// Prefer an exact ACM-id match when a (non-zero) id is known.
 	if !state.NodeTypeID.IsNull() && state.NodeTypeID.ValueString() != "" {
-		if id, perr := parseACMID("node_type_id", state.NodeTypeID.ValueString()); perr == nil {
-			wantID, hasID = id, true
+		if id, perr := parseACMID("node_type_id", state.NodeTypeID.ValueString()); perr == nil && id != 0 {
+			for i := range nts {
+				if nts[i].ID == id {
+					return nts[i], true, nil
+				}
+			}
 		}
 	}
+	// Fall back to (scope, code): covers import (no id yet) and self-heals a
+	// lost/zero id from an earlier bug so the resource re-adopts the real node
+	// type instead of recreating it. (scope, code) is the config-stable key.
 	for i := range nts {
-		if hasID {
-			if nts[i].ID == wantID {
-				return nts[i], true, nil
-			}
-			continue
-		}
 		if nts[i].Scope == state.Scope.ValueString() && nts[i].Code == state.Code.ValueString() {
 			return nts[i], true, nil
 		}
@@ -310,14 +321,9 @@ func (r *nodeTypeResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	id, err := parseACMID("node_type_id", plan.NodeTypeID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid node type id in state", err.Error())
-		return
-	}
-
-	// Preserve ACM's tolerations/nodeSelector/extraSpec: read the current node
-	// type and pass its opaque fields back unchanged so the edit never alters them.
+	// Look up the current node type (by id, falling back to scope+code) — this
+	// yields the authoritative ACM id even if state's node_type_id is stale/zero,
+	// and the opaque fields to preserve.
 	cur, found, ferr := r.findNodeType(ctx, plan)
 	if ferr != nil {
 		resp.Diagnostics.AddError("Failed to read node type before update", ferr.Error())
@@ -330,7 +336,7 @@ func (r *nodeTypeResource) Update(ctx context.Context, req resource.UpdateReques
 
 	// Send the operator's declared sizing (ACM uses its own code-derived value);
 	// preserve the opaque fields from the current type so the edit never alters them.
-	updated, eerr := r.client.EditNodeType(ctx, id, acm.NodeTypeRequest{
+	updated, eerr := r.client.EditNodeType(ctx, cur.ID, acm.NodeTypeRequest{
 		Name:         plan.Name.ValueString(),
 		Scope:        plan.Scope.ValueString(),
 		Code:         plan.Code.ValueString(),
@@ -346,6 +352,10 @@ func (r *nodeTypeResource) Update(ctx context.Context, req resource.UpdateReques
 	if eerr != nil {
 		resp.Diagnostics.AddError("Failed to update node type", eerr.Error())
 		return
+	}
+	// NodeTypeEdit omits the id in its response; restore the authoritative one.
+	if updated.ID == 0 {
+		updated.ID = cur.ID
 	}
 	applyNodeTypeToModel(&plan, updated)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)

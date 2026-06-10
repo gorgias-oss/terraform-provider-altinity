@@ -139,7 +139,9 @@ func TestNodeTypeResource_CreateWithNameDoesFollowUpEdit(t *testing.T) {
 			edited = true
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &editBody)
-			_, _ = w.Write([]byte(`{"data":{"id":"14140","scope":"clickhouse","code":"c4-standard-24-lssd","name":"my-pool","cpu":"24","memory":"80160","capacity":"10","isSpot":false}}`))
+			// ACM's NodeTypeEdit response omits "id" — the provider must preserve
+			// the id from create, else state stores node_type_id=0 and recreates.
+			_, _ = w.Write([]byte(`{"data":{"scope":"clickhouse","code":"c4-standard-24-lssd","name":"my-pool","cpu":"24","memory":"80160","capacity":"10","isSpot":false}}`))
 		default:
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
@@ -167,6 +169,9 @@ func TestNodeTypeResource_CreateWithNameDoesFollowUpEdit(t *testing.T) {
 	var out nodeTypeResourceModel
 	require.False(t, resp.State.Get(ctx, &out).HasError())
 	assert.Equal(t, "my-pool", out.Name.ValueString())
+	// id must be preserved from create (NodeTypeEdit's response has no id).
+	assert.Equal(t, "14140", out.NodeTypeID.ValueString())
+	assert.Equal(t, "2293:14140", out.ID.ValueString())
 }
 
 // CreateAdopt: found by (scope,code) -> CreateNodeType NOT called.
@@ -215,7 +220,8 @@ func TestNodeTypeResource_UpdatePreservesTolerations(t *testing.T) {
 		case strings.HasPrefix(r.URL.Path, "/nodetype/") && r.Method == http.MethodPost:
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &editBody)
-			_, _ = w.Write([]byte(`{"data":{"id":"14138","scope":"clickhouse","code":"c3d-highcpu-16","name":"c3d-highcpu-16","cpu":"16","memory":"27380","capacity":"10","isSpot":false}}`))
+			// NodeTypeEdit response omits "id" (matches real ACM).
+			_, _ = w.Write([]byte(`{"data":{"scope":"clickhouse","code":"c3d-highcpu-16","name":"c3d-highcpu-16","cpu":"16","memory":"27380","capacity":"10","isSpot":false}}`))
 		default:
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
@@ -245,6 +251,43 @@ func TestNodeTypeResource_UpdatePreservesTolerations(t *testing.T) {
 	require.True(t, ok, "preserved tolerations must be sent on update")
 	require.Len(t, tols, 1)
 	assert.Equal(t, "clickhouse", tols[0].(map[string]any)["value"])
+
+	// id must survive the edit (NodeTypeEdit response omits it).
+	var out nodeTypeResourceModel
+	require.False(t, resp.State.Get(ctx, &out).HasError())
+	assert.Equal(t, "14138", out.NodeTypeID.ValueString())
+	assert.Equal(t, "2293:14138", out.ID.ValueString())
+}
+
+// ReadSelfHealsLostID: state with a zero/stale node_type_id must NOT be dropped;
+// Read re-adopts the real node type by (scope, code) and rewrites the id. This
+// recovers state corrupted by the earlier id=0 bug instead of recreating.
+func TestNodeTypeResource_ReadSelfHealsLostID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		http.ServeFile(w, r, "../acm/testdata/nodetypes_withused.json")
+	}))
+	t.Cleanup(srv.Close)
+
+	r := &nodeTypeResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
+	s := nodeTypeSchema(t)
+	ctx := context.Background()
+
+	state := freshNodeTypePlan()
+	state.Code = types.StringValue("n2d-standard-32") // exists in fixture as id 14138
+	state.NodeTypeID = types.StringValue("0")         // corrupted by the old bug
+	state.ID = types.StringValue("2293:0")
+
+	req := resource.ReadRequest{State: newNodeTypeState(t, s, state)}
+	resp := resource.ReadResponse{State: newNodeTypeState(t, s, state)}
+	r.Read(ctx, req, &resp)
+
+	require.False(t, resp.Diagnostics.HasError())
+	require.False(t, resp.State.Raw.IsNull(), "must NOT drop the resource — self-heal instead")
+	var out nodeTypeResourceModel
+	require.False(t, resp.State.Get(ctx, &out).HasError())
+	assert.Equal(t, "14138", out.NodeTypeID.ValueString(), "id healed from (scope,code)")
+	assert.Equal(t, "2293:14138", out.ID.ValueString())
 }
 
 // DeleteInUse: ACM rejects -> clear error.
