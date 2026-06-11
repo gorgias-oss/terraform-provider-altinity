@@ -4,6 +4,22 @@
 # provider mirrors the ACM UI's per-scope default tolerations, and on update it
 # preserves whatever ACM has. `used` is read-only (true when a cluster uses it).
 
+
+# Resolve an existing Altinity.Cloud environment by name. The computed `id` is
+# what the altinity_clickhouse_cluster resource's `environment` argument expects.
+
+variable "altinity_environment" {
+  type = string
+}
+
+data "altinity_environment" "this" {
+  name = var.altinity_environment
+}
+
+output "environment_id" {
+  value = data.altinity_environment.this.id
+}
+
 # Discover the available instance types for the environment's provider+region.
 data "altinity_instance_types" "gcp" {
   cloud_provider = "gcp"
@@ -16,11 +32,11 @@ locals {
 }
 
 resource "altinity_node_type" "clickhouse_16" {
-  environment = altinity_environment.example.id
+  environment = data.altinity_environment.this.id
   scope       = "clickhouse"
   code        = local.chosen.name
   cpu         = local.chosen.cpu
   memory      = local.chosen.memory * 1024 # data source is GiB; node type wants MB
   capacity    = 10
-  # name     = "analytics-pool" # optional; applied via a follow-up edit
+  name        = "analytics" # optional; applied via a follow-up edit
 }
