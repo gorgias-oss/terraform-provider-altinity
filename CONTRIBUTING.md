@@ -43,10 +43,21 @@ Clone and build:
 ```sh
 git clone https://github.com/gorgias-oss/terraform-provider-altinity.git
 cd terraform-provider-altinity
-make build       # produces bin/terraform-provider-altinity
-make test        # offline test suite (~5s)
-make lint        # go vet + staticcheck if installed
+make install-hooks  # enable the pre-commit secret scan (run once per clone)
+make build          # produces bin/terraform-provider-altinity
+make test           # offline test suite (~5s)
+make lint           # go vet + staticcheck if installed
 ```
+
+**Enable the git hooks** (`make install-hooks`, one-time per clone): this points
+`core.hooksPath` at `.githooks/`, whose `pre-commit` runs `scripts/check-secrets.sh`
+to block commits containing secrets or unredacted production data (PEM keys,
+JWT/bearer tokens, unmasked secret fields, Datadog-style keys). Test fixtures must
+be built from **sanitized** captures — redact credentials *and* prod identifiers
+(env names, hostnames, bucket names, IPs, org/owner details) and use synthetic
+values (`example-env`, `REDACTED-…`, `203.0.113.x`). Scan the whole tree anytime
+with `make check-secrets`. A genuine false positive can be bypassed with
+`git commit --no-verify`.
 
 To run the example against your locally built binary:
 

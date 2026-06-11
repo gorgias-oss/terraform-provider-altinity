@@ -103,10 +103,25 @@ var allowedOps = []string{
 	"ClickhouseKeeperEdit",   // POST   /environment/{environment}/keeper/{name}
 	"ClickhouseKeeperDelete", // DELETE /environment/{environment}/keeper/{name}
 	"ClickhouseKeeperStatus", // GET    /environment/{environment}/keeper/{name}/status
+	// Node type management (altinity_node_type resource).
+	"NodeTypeAdd",    // POST   /environment/{environment}/nodetypes
+	"NodeTypeEdit",   // POST   /nodetype/{id}
+	"NodeTypeRemove", // DELETE /nodetype/{id}
 	// Environment + node-type + version discovery.
 	"EnvironmentList", // GET /environments
 	"NodeTypeList",    // GET /environment/{environment}/nodetypes
 	"CloudOptions",    // GET /cloud/{environment}/options (type=versions, ...)
+	// Environment lifecycle (altinity_environment resource). Note: there is no
+	// delete op — environment deletion requires an out-of-band email + MFA
+	// confirmation that cannot be automated, so the resource's destroy removes
+	// from state and warns rather than calling the API (see resource_environment.go).
+	"EnvironmentRequest", // POST   /environments/request
+	"EnvironmentShow",    // GET    /environment/{id}
+	"EnvironmentEdit",    // POST   /environment/{id}
+	// Global cloud options (altinity_regions data source). The non-env-scoped
+	// variant of CloudOptions: region discovery happens before any environment
+	// exists, so it cannot use the {environment}-scoped endpoint.
+	"CloudOptionsGlobal", // GET    /cloud/options
 }
 
 // allowedSchemas is the set of named components.schemas we emit faithful wire

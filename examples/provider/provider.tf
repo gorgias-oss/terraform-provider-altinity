@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.5.7"
   required_providers {
     altinity = {
-      source  = "gorgias/altinity"
+      source  = "gorgias-oss/altinity"
       version = ">= 0.1.0"
     }
   }

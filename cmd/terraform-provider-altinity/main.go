@@ -26,7 +26,7 @@ func main() {
 
 	opts := providerserver.ServeOpts{
 		// Registry address consumers declare in required_providers.
-		Address: "registry.terraform.io/gorgias/altinity",
+		Address: "registry.terraform.io/gorgias-oss/altinity",
 		Debug:   debug,
 	}
 

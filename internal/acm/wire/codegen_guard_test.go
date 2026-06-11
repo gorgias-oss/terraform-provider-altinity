@@ -41,6 +41,9 @@ var allowlistForGuard = []string{
 	"ProfileSettingsAdd",
 	"ProfileSettingsEdit",
 	"ProfileSettingsRemove",
+	"NodeTypeAdd",
+	"NodeTypeEdit",
+	"NodeTypeRemove",
 	"EnvironmentList",
 	"NodeTypeList",
 	"ClickhouseKeeperLaunch",
@@ -49,6 +52,10 @@ var allowlistForGuard = []string{
 	"ClickhouseKeeperDelete",
 	"ClickhouseKeeperStatus",
 	"CloudOptions",
+	"EnvironmentRequest",
+	"EnvironmentShow",
+	"EnvironmentEdit",
+	"CloudOptionsGlobal",
 }
 
 // TestAllowlistedOpsResolveInSpec asserts every allowlisted operationId still

@@ -1,0 +1,46 @@
+{
+  "data": {
+    "zones": [
+      "us-east1-b",
+      "us-east1-c",
+      "us-east1-d"
+    ],
+    "instanceTypes": [
+      {
+        "name": "c2-standard-16",
+        "cpu": 16,
+        "cpuAllocatable": 15.89,
+        "mem": 64,
+        "memAllocatable": 56.49999999999999
+      },
+      {
+        "name": "c2-standard-30",
+        "cpu": 30,
+        "cpuAllocatable": 29.855000000000004,
+        "mem": 120,
+        "memAllocatable": 107.46000000000001
+      },
+      {
+        "name": "c2-standard-4",
+        "cpu": 4,
+        "cpuAllocatable": 3.92,
+        "mem": 16,
+        "memAllocatable": 12.82
+      },
+      {
+        "name": "c2-standard-60",
+        "cpu": 60,
+        "cpuAllocatable": 59.78,
+        "mem": 240,
+        "memAllocatable": 221.14000000000001
+      },
+      {
+        "name": "c2-standard-8",
+        "cpu": 8,
+        "cpuAllocatable": 7.91,
+        "mem": 32,
+        "memAllocatable": 27.379999999999995
+      }
+    ]
+  }
+}

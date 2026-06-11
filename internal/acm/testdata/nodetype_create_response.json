@@ -1,0 +1,1 @@
+{"data":{"id":"14140","scope":"clickhouse","code":"c4-standard-24-lssd","name":"c4-standard-24-lssd","storageClass":"","cpu":"24","memory":"80160","id_environment":"2293","extraSpec":"","tolerations":[{"key":"dedicated","operator":"Equal","effect":"NoSchedule","value":"clickhouse"}],"nodeSelector":"","capacity":"10","isSpot":false,"cpu_alloc":"24","memory_alloc":"80160"}}

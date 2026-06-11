@@ -41,7 +41,7 @@ func TestProvider_SchemaHasTokenAndURL(t *testing.T) {
 func TestProvider_RegistersDataSources(t *testing.T) {
 	p := New("dev")()
 	dsFactories := p.DataSources(context.Background())
-	require.Len(t, dsFactories, 7) // environment, node_types, versions, storage_classes, zones, clickhouse_profiles, clickhouse_profile
+	require.Len(t, dsFactories, 9) // environment, node_types, versions, storage_classes, zones, regions, instance_types, clickhouse_profiles, clickhouse_profile
 
 	want := map[string]bool{
 		"altinity_environment":         false,
@@ -49,6 +49,8 @@ func TestProvider_RegistersDataSources(t *testing.T) {
 		"altinity_clickhouse_versions": false,
 		"altinity_storage_classes":     false,
 		"altinity_zones":               false,
+		"altinity_regions":             false,
+		"altinity_instance_types":      false,
 		"altinity_clickhouse_profiles": false,
 		"altinity_clickhouse_profile":  false,
 	}
@@ -114,14 +116,16 @@ func TestProvider_RegistersAllResources(t *testing.T) {
 	p := New("dev")()
 	resFactories := p.Resources(context.Background())
 
-	// cluster, keeper, user, setting, profile, profile_setting.
-	require.Len(t, resFactories, 6)
+	// environment, node_type, cluster, keeper, user, setting, profile, profile_setting.
+	require.Len(t, resFactories, 8)
 
 	want := map[string]bool{
+		"altinity_environment":                false,
+		"altinity_node_type":                  false,
 		"altinity_clickhouse_cluster":         false,
 		"altinity_clickhouse_keeper":          false,
 		"altinity_clickhouse_user":            false,
-		"altinity_clickhouse_cluster_setting":         false,
+		"altinity_clickhouse_cluster_setting": false,
 		"altinity_clickhouse_profile":         false,
 		"altinity_clickhouse_profile_setting": false,
 	}

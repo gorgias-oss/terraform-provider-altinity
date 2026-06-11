@@ -34,10 +34,10 @@ import (
 
 // Ensure the resource satisfies the framework interfaces.
 var (
-	_ resource.Resource                     = (*clusterResource)(nil)
-	_ resource.ResourceWithConfigure        = (*clusterResource)(nil)
-	_ resource.ResourceWithImportState      = (*clusterResource)(nil)
-	_ resource.ResourceWithValidateConfig   = (*clusterResource)(nil)
+	_ resource.Resource                   = (*clusterResource)(nil)
+	_ resource.ResourceWithConfigure      = (*clusterResource)(nil)
+	_ resource.ResourceWithImportState    = (*clusterResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*clusterResource)(nil)
 )
 
 // Default operation timeouts (design §7.3). The timeouts block lets the user
@@ -1799,14 +1799,23 @@ type resolvedTimeouts struct {
 	delete time.Duration
 }
 
-// resolveTimeouts parses the optional timeouts block, applying defaults for any
-// unset value. Invalid duration strings produce a diagnostic.
+// resolveTimeouts parses the optional timeouts block using the cluster's
+// default timeouts for any unset value. Invalid duration strings produce a
+// diagnostic.
 func resolveTimeouts(ctx context.Context, obj types.Object) (resolvedTimeouts, diag.Diagnostics) {
-	out := resolvedTimeouts{
+	return resolveTimeoutsWithDefaults(ctx, obj, resolvedTimeouts{
 		create: defaultCreateTimeout,
 		update: defaultUpdateTimeout,
 		delete: defaultDeleteTimeout,
-	}
+	})
+}
+
+// resolveTimeoutsWithDefaults parses the optional timeouts block, applying the
+// supplied defaults for any unset value. Different resources have different
+// sensible defaults (e.g. environment provisioning is far slower than a setting
+// edit), so the defaults are a parameter rather than package constants. Invalid
+// duration strings produce a diagnostic.
+func resolveTimeoutsWithDefaults(ctx context.Context, obj types.Object, out resolvedTimeouts) (resolvedTimeouts, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if obj.IsNull() || obj.IsUnknown() {
 		return out, diags

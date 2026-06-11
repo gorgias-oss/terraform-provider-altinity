@@ -1,10 +1,10 @@
-.PHONY: build test testacc lint docs install fmt vet tidy generate release-notes release-snapshot
+.PHONY: build test testacc lint docs install fmt vet tidy generate release-notes release-snapshot install-hooks check-secrets
 
 BINARY := bin/terraform-provider-altinity
 
 # Local filesystem mirror for `terraform`/`tofu` dev_overrides.
 HOSTNAME := registry.terraform.io
-NAMESPACE := gorgias
+NAMESPACE := gorgias-oss
 NAME := altinity
 VERSION := 0.1.0
 OS_ARCH := $(shell go env GOOS)_$(shell go env GOARCH)
@@ -40,6 +40,16 @@ docs:
 install: build
 	mkdir -p $(INSTALL_DIR)
 	cp $(BINARY) $(INSTALL_DIR)/terraform-provider-altinity_v$(VERSION)
+
+# Enable the versioned git hooks (pre-commit secret scan). Run once per clone.
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks enabled (core.hooksPath=.githooks); pre-commit will scan for secrets."
+
+# Scan all tracked files for secrets / unredacted prod data (CI + manual full sweep).
+# The pre-commit hook scans only staged content; this scans the whole tree.
+check-secrets:
+	@git ls-files -z | xargs -0 bash scripts/check-secrets.sh
 
 fmt:
 	gofmt -w .

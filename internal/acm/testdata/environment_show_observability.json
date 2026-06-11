@@ -1,0 +1,6 @@
+{"data":{
+  "id":"2293","name":"example-env","normalizedName":"example-env","displayName":"Example",
+  "type":"kubernetes","domain":"example-env.altinity.cloud","status":"online","state":null,
+  "datadogSettings":{"enabled":true,"key":"REDACTED-DATADOG-KEY","region":"datadoghq.com","metrics":true,"logs":true,"tableStats":false},
+  "maintenanceWindowSchedules":[{"name":"w1","enabled":true,"hour":16,"lengthInHours":4,"days":["FRIDAY","SATURDAY"]}]
+}}

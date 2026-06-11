@@ -1,0 +1,33 @@
+{
+  "id": "641",
+  "name": "example-env",
+  "normalizedName": "example-env",
+  "displayName": "Example Environment",
+  "created": "2023-05-12 06:37:59",
+  "type": "kubernetes",
+  "domain": "example-env.altinity.cloud",
+  "status": "online",
+  "state": null,
+  "id_owner": "1",
+  "id_parent": null,
+  "kubeProvider": "gcp",
+  "kubeNamespace": "altinity-cloud-managed-clickhouse",
+  "kubeAPIUrl": "https://k8s.example-env.altinity.cloud",
+  "kubeToken": "REDACTED-K8S-SA-TOKEN",
+  "kubeAuthOptions": { "type": "token", "clientKey": "", "clientCert": "", "caCert": "" },
+  "user": "clickhouse_operator",
+  "pass": "*******",
+  "monitoring": true,
+  "datadogSettings": { "enabled": false, "key": "REDACTED-DATADOG-KEY", "region": "datadoghq.com" },
+  "datadogPassword": "*******",
+  "backupOptions": { "provider": "gcp", "bucket": "example-backup-bucket", "secretKey": "*******", "enable": true },
+  "options": {
+    "region": "us-east1",
+    "azlist": ["us-east1-b", "us-east1-c", "us-east1-d"],
+    "network": "10.0.0.0/21"
+  },
+  "coreCIDR": "203.0.113.10,203.0.113.11,203.0.113.12,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+  "hostedByAltinity": false,
+  "managed": false,
+  "isAnywhere": false
+}

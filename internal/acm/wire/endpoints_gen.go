@@ -201,6 +201,24 @@ var Endpoints = map[string]Endpoint{
 		PathTemplate: "/environment/{environment}/keeper/{name}/status",
 		PathParams:   []string{"environment", "name"},
 	},
+	"NodeTypeAdd": {
+		OperationID:  "NodeTypeAdd",
+		Method:       "POST",
+		PathTemplate: "/environment/{environment}/nodetypes",
+		PathParams:   []string{"environment"},
+	},
+	"NodeTypeEdit": {
+		OperationID:  "NodeTypeEdit",
+		Method:       "POST",
+		PathTemplate: "/nodetype/{id}",
+		PathParams:   []string{"id"},
+	},
+	"NodeTypeRemove": {
+		OperationID:  "NodeTypeRemove",
+		Method:       "DELETE",
+		PathTemplate: "/nodetype/{id}",
+		PathParams:   []string{"id"},
+	},
 	"EnvironmentList": {
 		OperationID:  "EnvironmentList",
 		Method:       "GET",
@@ -218,6 +236,30 @@ var Endpoints = map[string]Endpoint{
 		Method:       "GET",
 		PathTemplate: "/cloud/{environment}/options",
 		PathParams:   []string{"environment"},
+	},
+	"EnvironmentRequest": {
+		OperationID:  "EnvironmentRequest",
+		Method:       "POST",
+		PathTemplate: "/environments/request",
+		PathParams:   nil,
+	},
+	"EnvironmentShow": {
+		OperationID:  "EnvironmentShow",
+		Method:       "GET",
+		PathTemplate: "/environment/{id}",
+		PathParams:   []string{"id"},
+	},
+	"EnvironmentEdit": {
+		OperationID:  "EnvironmentEdit",
+		Method:       "POST",
+		PathTemplate: "/environment/{id}",
+		PathParams:   []string{"id"},
+	},
+	"CloudOptionsGlobal": {
+		OperationID:  "CloudOptionsGlobal",
+		Method:       "GET",
+		PathTemplate: "/cloud/options",
+		PathParams:   nil,
 	},
 }
 
@@ -254,7 +296,14 @@ const (
 	OpClickhouseKeeperEdit   = "ClickhouseKeeperEdit"
 	OpClickhouseKeeperDelete = "ClickhouseKeeperDelete"
 	OpClickhouseKeeperStatus = "ClickhouseKeeperStatus"
+	OpNodeTypeAdd            = "NodeTypeAdd"
+	OpNodeTypeEdit           = "NodeTypeEdit"
+	OpNodeTypeRemove         = "NodeTypeRemove"
 	OpEnvironmentList        = "EnvironmentList"
 	OpNodeTypeList           = "NodeTypeList"
 	OpCloudOptions           = "CloudOptions"
+	OpEnvironmentRequest     = "EnvironmentRequest"
+	OpEnvironmentShow        = "EnvironmentShow"
+	OpEnvironmentEdit        = "EnvironmentEdit"
+	OpCloudOptionsGlobal     = "CloudOptionsGlobal"
 )
