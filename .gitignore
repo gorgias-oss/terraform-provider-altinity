@@ -37,3 +37,6 @@ Thumbs.db
 # Acceptance-test credentials
 .env
 .envrc
+
+# Internal design artifacts (brainstorm specs/plans) — not part of the published provider.
+docs/superpowers/
