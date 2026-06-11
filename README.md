@@ -5,12 +5,14 @@
 
 Maintained by [Gorgias, Inc.](https://gorgias.com)
 
-A Terraform / OpenTofu provider that manages **ClickHouse clusters inside an
-existing Altinity.Cloud environment** via the Altinity Cloud Manager (ACM)
-REST API.
+A Terraform / OpenTofu provider that manages **Altinity.Cloud environments
+and the ClickHouse clusters inside them** via the Altinity Cloud Manager
+(ACM) REST API.
 
-The official `altinity/altinitycloud` provider manages only *environments*
-(BYOC infrastructure). This provider fills the gap: it creates and manages
+The official `altinity/altinitycloud` provider manages only BYOC
+infrastructure connections. This provider covers the rest of the ACM
+surface: it provisions environments (including Datadog integration and
+maintenance windows), defines node types, and creates and manages
 ClickHouse clusters and their satellite resources (settings, profiles,
 users, keepers).
 
@@ -97,6 +99,8 @@ guarantees.
 
 | Resource | Manages |
 | -------- | ------- |
+| `altinity_environment` | An Altinity.Cloud environment (provisioning, Datadog integration, maintenance windows) |
+| `altinity_node_type` | An environment node type (instance shape) clusters can be scheduled onto |
 | `altinity_clickhouse_cluster` | A ClickHouse cluster inside an environment |
 | `altinity_clickhouse_keeper` | A CH Keeper coordination cluster |
 | `altinity_clickhouse_user` | A DB user on a cluster |
@@ -111,6 +115,8 @@ guarantees.
 | `altinity_environment` | An ACM environment by name (id, type, domain, state) |
 | `altinity_clickhouse_versions` | Available ClickHouse versions, filterable by major/minor/stream (`altinity-stable` / `altinity-antalya` / `upstream`), with a `latest` selector |
 | `altinity_node_types` | Valid instance-type codes per scope (`clickhouse` for clusters, `zookeeper` for keepers) |
+| `altinity_regions` | Regions available per cloud provider (feeds `altinity_environment.region`) |
+| `altinity_instance_types` | Instance-type catalog per cloud provider + region (feeds `altinity_node_type`) |
 | `altinity_storage_classes` | Valid storage-class codes (e.g. `pd-balanced`, `pd-ssd`) |
 | `altinity_zones` | Availability zones for the environment |
 | `altinity_clickhouse_profile` | A single settings profile on a cluster, by name |
@@ -224,6 +230,11 @@ Adoption still validates that immutable topology fields (environment, type,
 role, shards, replicas, keeper_name) match the plan. If any differ,
 adoption fails — destroy the existing cluster or align your config first.
 
+`altinity_clickhouse_keeper` follows the same rule: applying against an
+environment that already contains a keeper with the same name fails loudly
+unless the keeper resource sets `adopt_existing = true` (also the way to
+resume a keeper create that was interrupted after launch).
+
 ### Drift detection caveats
 
 The provider's drift detection is **selective**, not exhaustive — by design.
@@ -263,6 +274,8 @@ unsafe for the listed attributes.
 ### Importing
 
 ```sh
+terraform import altinity_environment.this               2267
+terraform import altinity_node_type.ch16                 2267:clickhouse:n2d-standard-16
 terraform import altinity_clickhouse_cluster.this        12345
 terraform import altinity_clickhouse_keeper.k            2267:demo-keeper
 terraform import altinity_clickhouse_user.app            12345:app
@@ -270,6 +283,9 @@ terraform import altinity_clickhouse_cluster_setting.max_threads 12345:max_threa
 terraform import altinity_clickhouse_profile.readonly    12345:readonly
 ```
 
+Environments import by their numeric ACM id. Node types import as
+`<environment>:<scope>:<code>` (scope is `clickhouse`, `zookeeper`, or
+`system`); the numeric node-type id is resolved on the first refresh.
 Satellite resource IDs use the form `<cluster_id>:<name>`. Keeper IDs use
 `<environment>:<name>`. The keeper split is on the **first** colon (env id
 is numeric); satellite splits are on the **last** colon (defensive).
@@ -314,7 +330,14 @@ state, and the network. The short version:
   passwords — case-insensitive, at any nesting depth.
 - HTTP path arguments are **URL-escaped** so a malicious name cannot
   reshape the request URL.
-- Cluster adoption is **opt-in** (`adopt_existing = true`).
+- Cluster and keeper adoption is **opt-in** (`adopt_existing = true`):
+  nothing that can take destroy authority over compute is adopted silently.
+  The one deliberate exception is `altinity_environment`, which adopts by
+  name because its resumable create depends on it — and its destroy never
+  deletes anything (environment deletion requires out-of-band email + MFA).
+- Clusters are **private by default** (`public_endpoint = false`); an
+  explicitly public endpoint with no `ip_whitelist` raises a plan-time
+  warning.
 - All opaque-JSON cluster attributes (`datadog`, `backup_options`,
   `uptime_settings`, `alternate_endpoints`) are marked `Sensitive: true`.
 
@@ -349,7 +372,6 @@ status (`acm poll status`).
 ```sh
 make build      # build the provider binary into bin/
 make test       # offline tests (uses httptest fixtures)
-make testacc    # acceptance tests (TF_ACC=1; requires a live token + env)
 make generate   # regenerate wire codegen
 make lint       # go vet + staticcheck (if installed)
 make docs       # tfplugindocs (if installed)
@@ -382,5 +404,3 @@ or the live API before implementation.
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
-=======
-Terraform provider for Altinity.

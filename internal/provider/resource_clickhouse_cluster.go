@@ -223,7 +223,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema = schema.Schema{
 		Description: "Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). " +
 			"This resource does not manage ClickHouse settings, profiles, or users — use the " +
-			"`altinity_clickhouse_setting`, `altinity_clickhouse_profile`, and `altinity_clickhouse_user` resources for those.",
+			"`altinity_clickhouse_cluster_setting`, `altinity_clickhouse_profile`, and `altinity_clickhouse_user` resources for those.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
@@ -432,7 +432,9 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 					"Mutable in place via rescale (changing the AZ set rebalances nodes; it does NOT destroy the cluster).",
 			},
 
-			// ---- networking (defaults match the ACM UI launch payload) ----
+			// ---- networking (defaults match the ACM UI launch payload,
+			// EXCEPT public_endpoint, which defaults to private — see its
+			// attribute comment) ----
 			"secure": schema.BoolAttribute{
 				Optional:    true,
 				Computed:    true,
@@ -444,10 +446,15 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				},
 			},
 			"public_endpoint": schema.BoolAttribute{
-				Optional:    true,
-				Computed:    true,
-				Default:     booldefault.StaticBool(true),
-				Description: "Expose a public endpoint (default true). Changing this forces replacement.",
+				Optional: true,
+				Computed: true,
+				// Deliberately diverges from the ACM UI launch payload (which
+				// defaults to public): a Terraform-managed cluster must opt IN
+				// to internet exposure. Flipped in 0.2.0 — see CHANGELOG.
+				Default: booldefault.StaticBool(false),
+				Description: "Expose a public endpoint (default `false`). When `true` the cluster endpoint is " +
+					"reachable from the internet unless `ip_whitelist` restricts it — set both deliberately. " +
+					"Changing this forces replacement.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.RequiresReplace(),
 					boolplanmodifier.UseStateForUnknown(),
@@ -744,6 +751,11 @@ func (r *clusterResource) ValidateConfig(ctx context.Context, req resource.Valid
 // them as a one-of selector for the coordination cluster; setting both leads
 // to a mid-apply HTTP error AFTER the cluster may already be partially
 // provisioned. Fail at plan time with a clear diagnostic instead.
+//
+// Rule 3 (warning, not error): `public_endpoint = true` with no
+// `ip_whitelist` means the endpoint is reachable from the whole internet.
+// That can be intentional, so it only warns — but it must be visible in
+// every plan, including CI.
 func validateClusterModel(cfg clusterResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
@@ -782,6 +794,24 @@ func validateClusterModel(cfg clusterResourceModel) diag.Diagnostics {
 				"be partially provisioned. Choose `keeper_name = \"<existing-keeper>\"` "+
 				"to attach a managed CH Keeper resource, or `zookeeper = \"launch\"` to "+
 				"let ACM auto-create a ZK ensemble.",
+		)
+	}
+
+	// Rule 3: warn on public endpoint without an IP allowlist. ValidateConfig
+	// sees raw config (defaults not yet applied), so a null public_endpoint
+	// means the private default — only an explicit `true` can warn. An unknown
+	// ip_whitelist (e.g. from a variable) gets the benefit of the doubt.
+	publicSet := !cfg.PublicEndpoint.IsNull() && !cfg.PublicEndpoint.IsUnknown() && cfg.PublicEndpoint.ValueBool()
+	whitelistEmpty := cfg.IPWhitelist.IsNull() ||
+		(!cfg.IPWhitelist.IsUnknown() && strings.TrimSpace(cfg.IPWhitelist.ValueString()) == "")
+	if publicSet && whitelistEmpty {
+		diags.AddAttributeWarning(
+			path.Root("public_endpoint"),
+			"Public endpoint without an IP allowlist",
+			"public_endpoint = true with no ip_whitelist makes the cluster endpoint reachable "+
+				"from the entire internet (TLS and authentication still apply, but it is exposed). "+
+				"Set ip_whitelist to the CIDRs that need access, or set it to \"0.0.0.0/0\" "+
+				"explicitly to silence this warning if internet-wide exposure is intentional.",
 		)
 	}
 
@@ -1153,21 +1183,21 @@ func (r *clusterResource) Update(ctx context.Context, req resource.UpdateRequest
 	// (4) admin password change — resolve the admin user id via list, then
 	// update in place. No poll needed (the DB user update is synchronous).
 	//
-	// Guards: both plan and prior state must carry a known, non-null value. A
-	// null plan means the user removed the attribute from config (write-only
-	// semantics — we don't clear at the API). A null state means this is the
-	// first apply after import / no prior password was managed: there's no
-	// "change" to react to, the operator must run a separate apply once they
-	// know what password they want. This avoids the import-then-update-fails
-	// scenario where state.AdminUser/AdminPass are both empty.
+	// Guards: the plan must carry a known, non-null value. A null plan means
+	// the user removed the attribute from config (write-only semantics — we
+	// don't clear at the API). A null STATE with a known plan is the first
+	// apply after import: the operator explicitly wrote a desired password,
+	// so apply it — skipping here while the final State.Set below persists
+	// plan.AdminPass would record the password as set without ever sending
+	// it to the API (silent non-rotation: subsequent applies see no diff).
 	//
 	// admin_user is RequiresReplace + has a default of "admin", so plan.AdminUser
 	// is always populated under Update. Use that (not state) to resolve the
 	// target login — imports may not have admin_user in state.
 	planPassKnown := !plan.AdminPass.IsNull() && !plan.AdminPass.IsUnknown()
 	statePassKnown := !state.AdminPass.IsNull() && !state.AdminPass.IsUnknown()
-	if planPassKnown && statePassKnown &&
-		plan.AdminPass.ValueString() != state.AdminPass.ValueString() {
+	if planPassKnown &&
+		(!statePassKnown || plan.AdminPass.ValueString() != state.AdminPass.ValueString()) {
 		users, lerr := r.client.ListUsers(ctx, id)
 		if lerr != nil {
 			resp.Diagnostics.AddError("Failed to list users for admin password update", lerr.Error())

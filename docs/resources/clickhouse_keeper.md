@@ -40,6 +40,7 @@ resource "altinity_clickhouse_keeper" "example" {
 
 ### Optional
 
+- `adopt_existing` (Boolean) If true, Create will adopt an existing keeper of the same name in the target environment instead of erroring. Default false — a keeper created out-of-band (or by another team using the same ACM token) will NOT be silently placed under Terraform management. Set to true when migrating an ACM-created keeper into IaC, or to resume a create that was interrupted after launch.
 - `image` (String) Keeper image/version.
 - `instance_type` (String) Node instance type — a zookeeper-scoped type (e.g. e2-standard-2); see the altinity_node_types data source.
 - `timeouts` (Attributes) Operation timeouts (Go duration strings). (see [below for nested schema](#nestedatt--timeouts))

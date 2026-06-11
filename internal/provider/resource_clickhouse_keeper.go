@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -47,10 +48,17 @@ type keeperResourceModel struct {
 	InstanceType    types.String `tfsdk:"instance_type"`
 	Image           types.String `tfsdk:"image"`
 	Ha              types.Bool   `tfsdk:"ha"`
-	Zones           []string     `tfsdk:"zones"`
+	// Zones is a framework List (not a Go slice) so the framework can
+	// represent an "unknown" value sourced from a data source (e.g.
+	// `zones = data.altinity_zones.this.zones` behind a same-apply
+	// altinity_environment). Decoding unknown into a plain []string fails
+	// with "Received unknown value, however the target type cannot handle
+	// unknown values." Same rationale as clusterResourceModel.Azlist.
+	Zones types.List `tfsdk:"zones"`
 	CPULimits       types.String `tfsdk:"cpu_limits"`
 	CPURequests     types.String `tfsdk:"cpu_requests"`
 	ZoneTopologyKey types.String `tfsdk:"zone_topology_key"`
+	AdoptExisting   types.Bool   `tfsdk:"adopt_existing"`
 	Timeouts        types.Object `tfsdk:"timeouts"`
 }
 
@@ -137,6 +145,22 @@ func (r *keeperResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			// ---- adoption opt-in (default false) — same invariant as the
+			// cluster resource: nothing that can take destroy authority over
+			// compute is adopted silently. ----
+			"adopt_existing": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				Description: "If true, Create will adopt an existing keeper of the same name in the " +
+					"target environment instead of erroring. Default false — a keeper created " +
+					"out-of-band (or by another team using the same ACM token) will NOT be silently " +
+					"placed under Terraform management. Set to true when migrating an ACM-created " +
+					"keeper into IaC, or to resume a create that was interrupted after launch.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"timeouts": schema.SingleNestedAttribute{
 				Optional:    true,
 				Description: "Operation timeouts (Go duration strings).",
@@ -185,7 +209,7 @@ func splitKeeperCompositeID(id string) (environment, name string, err error) {
 func keeperLaunchReq(m keeperResourceModel) acm.KeeperLaunchRequest {
 	return acm.KeeperLaunchRequest{
 		Name:         m.Name.ValueString(),
-		Zones:        m.Zones,
+		Zones:        stringListToSlice(m.Zones),
 		InstanceType: m.InstanceType.ValueString(),
 		Image:        m.Image.ValueString(),
 	}
@@ -193,7 +217,7 @@ func keeperLaunchReq(m keeperResourceModel) acm.KeeperLaunchRequest {
 
 func keeperEditReq(m keeperResourceModel) acm.KeeperEditRequest {
 	return acm.KeeperEditRequest{
-		Zones:        m.Zones,
+		Zones:        stringListToSlice(m.Zones),
 		InstanceType: m.InstanceType.ValueString(),
 		Image:        m.Image.ValueString(),
 	}
@@ -240,13 +264,21 @@ func (r *keeperResource) Create(ctx context.Context, req resource.CreateRequest,
 	// one closure so a transient "operation is in progress" between the two
 	// re-tries the WHOLE sequence — the previous shape could observe "not found"
 	// just before the env lock was released by another op and then race the
-	// launch into the same lock anyway. Keepers are name-identified so an
-	// already-present keeper is silently adopted (no adopt_existing gate — out
-	// of scope for this PR; existing design).
+	// launch into the same lock anyway. Keepers are name-identified; adopting
+	// an already-present keeper is gated on adopt_existing (same invariant as
+	// the cluster resource — silent adoption hands Terraform destroy authority
+	// over something it didn't create).
+	adoptExisting := plan.AdoptExisting.ValueBool()
 	err := acm.RetryWhileBusy(opCtx, func() error {
 		if _, found, ferr := r.client.FindKeeperInEnv(opCtx, env, name); ferr != nil {
 			return ferr
 		} else if found {
+			if !adoptExisting {
+				return fmt.Errorf("a keeper named %q already exists in environment %s; "+
+					"Terraform refuses to adopt it by default. Set adopt_existing = true to take it over "+
+					"(also needed to resume a create that was interrupted after launch), or delete the "+
+					"existing keeper first if it is unmanaged", name, env)
+			}
 			return nil
 		}
 		return r.client.LaunchKeeper(opCtx, env, keeperLaunchReq(plan))

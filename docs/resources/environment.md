@@ -141,3 +141,14 @@ Optional:
 - `create` (String)
 - `delete` (String)
 - `update` (String)
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Environments are imported by their numeric ACM environment id.
+terraform import altinity_environment.example 2267
+```

@@ -56,7 +56,7 @@ resource "altinity_node_type" "clickhouse_16" {
   cpu         = local.chosen.cpu
   memory      = local.chosen.memory * 1024 # data source is GiB; node type wants MB
   capacity    = 10
-  name     = "analytics-pool" # optional; applied via a follow-up edit
+  name        = "analytics" # optional; applied via a follow-up edit
 }
 ```
 
@@ -83,3 +83,17 @@ resource "altinity_node_type" "clickhouse_16" {
 - `id` (String) Resource id, "<environment>:<node_type_id>".
 - `node_type_id` (String) The ACM node type id (used by /nodetype/{id}).
 - `used` (Boolean) True when a cluster currently uses this node type. Read-only.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Node types are imported by "<environment>:<scope>:<code>" (scope is
+# clickhouse, zookeeper, or system) — NOT by the state id
+# "<environment>:<node_type_id>". The numeric node-type id is resolved on
+# the first refresh after import.
+terraform import altinity_node_type.example 2267:clickhouse:n2d-standard-16
+```

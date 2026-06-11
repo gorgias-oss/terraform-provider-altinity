@@ -3,12 +3,12 @@
 page_title: "altinity_clickhouse_cluster Resource - Altinity.Cloud"
 subcategory: ""
 description: |-
-  Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). This resource does not manage ClickHouse settings, profiles, or users — use the altinity_clickhouse_setting, altinity_clickhouse_profile, and altinity_clickhouse_user resources for those.
+  Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). This resource does not manage ClickHouse settings, profiles, or users — use the altinity_clickhouse_cluster_setting, altinity_clickhouse_profile, and altinity_clickhouse_user resources for those.
 ---
 
 # altinity_clickhouse_cluster (Resource)
 
-Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). This resource does not manage ClickHouse settings, profiles, or users — use the `altinity_clickhouse_setting`, `altinity_clickhouse_profile`, and `altinity_clickhouse_user` resources for those.
+Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). This resource does not manage ClickHouse settings, profiles, or users — use the `altinity_clickhouse_cluster_setting`, `altinity_clickhouse_profile`, and `altinity_clickhouse_user` resources for those.
 
 ## Example Usage
 
@@ -111,7 +111,7 @@ resource "altinity_clickhouse_cluster" "example" {
 - `node_count` (Number) Number of nodes (maps to ACM `nodes`). Mutable in place via rescale.
 - `node_type` (String) The node type code (e.g. n2d-standard-2). Mutable in place via rescale.
 - `port` (Number) Native protocol port (ACM-UI default 9900 — NOT the upstream ClickHouse default of 9000). Override only if you have a specific reason to deviate from ACM's launch defaults; this is wired through to ACM at launch and is not echoed back, so the configured value is authoritative. Changing this on an existing cluster forces replacement.
-- `public_endpoint` (Boolean) Expose a public endpoint (default true). Changing this forces replacement.
+- `public_endpoint` (Boolean) Expose a public endpoint (default `false`). When `true` the cluster endpoint is reachable from the internet unless `ip_whitelist` restricts it — set both deliberately. Changing this forces replacement.
 - `replicas` (Number) Number of replicas per shard. Mutable in place via rescale (scale-out adds redundancy; scale-in removes replicas).
 - `replicate_schema` (Boolean) Replicate schema across replicas (default true). Changing this forces replacement.
 - `role` (String) Cluster role — REQUIRED by ACM at launch (omitting it returns HTTP 500). Use the API codes "prod" or "dev" (shown as Production / Development in the ACM UI; the UI labels themselves are rejected). Defaults to "prod". Changing it forces replacement.

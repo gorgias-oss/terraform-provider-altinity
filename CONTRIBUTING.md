@@ -172,16 +172,16 @@ Do not hand-edit the generated files. The CI guard will fail.
 
 ## Documentation
 
-User-facing docs live in two places:
+User-facing docs live in three places:
 
 - **`README.md`** — the entry point. Update it when adding a resource,
   data source, or major capability.
 - **`examples/`** — runnable Terraform configs. Keep the snippets minimal;
   they're the first thing operators copy-paste.
-
-We do not vendor generated Terraform registry docs in the repo. If
-`tfplugindocs` is installed, `make docs` regenerates them from the schema
-descriptions and the `examples/` snippets.
+- **`docs/`** — the generated Terraform Registry docs, vendored in the
+  repo (the Registry renders them from here). Never edit `docs/` by hand:
+  after changing a schema description or an example, run `make docs` and
+  commit the result. CI fails when `docs/` is stale.
 
 ## Releasing
 

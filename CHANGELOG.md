@@ -4,6 +4,95 @@ All notable changes to this provider will be documented in this file. The
 format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the provider follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### BREAKING
+
+- `altinity_clickhouse_cluster.public_endpoint` now defaults to **`false`**
+  (private). A new cluster is only internet-reachable when the config
+  explicitly sets `public_endpoint = true`. **Before upgrading**, any
+  existing cluster that relied on the old public default must add
+  `public_endpoint = true` to its config — otherwise the next plan shows
+  `public_endpoint: true → false`, which forces **cluster replacement**.
+  An explicitly public endpoint with no `ip_whitelist` now also raises a
+  plan-time warning (set `ip_whitelist = "0.0.0.0/0"` to silence it when
+  internet-wide exposure is intentional).
+- `altinity_clickhouse_keeper` no longer silently adopts a pre-existing
+  keeper of the same name: like the cluster resource, Create now fails
+  loudly unless `adopt_existing = true` is set. This also applies to
+  resuming a keeper create that was interrupted after launch — re-apply
+  with `adopt_existing = true`.
+
+### Added
+
+- `altinity_environment` resource — provisions an Altinity.Cloud environment
+  via the request flow and polls until ready. Create is **resumable**: a poll
+  timeout records no state and the next apply adopts the still-provisioning
+  environment by name. `terraform destroy` does **not** delete the environment
+  (deletion requires an out-of-band email + MFA confirmation); it warns and
+  drops the resource from state. Supports an optional `datadog` block
+  (`api_key` is write-only and Sensitive) and config-authoritative
+  `maintenance_windows` (null = unmanaged, `[]` = clear).
+- `altinity_node_type` resource — manages environment node types
+  (instance shapes) with adopt-by-(scope, code) create, in-place `code`
+  edits, and a self-healing id lookup. Tolerations / nodeSelector /
+  extraSpec are deliberately not managed. Imports as
+  `<environment>:<scope>:<code>`.
+- `altinity_regions` data source — regions per cloud provider, feeding
+  `altinity_environment.region`.
+- `altinity_instance_types` data source — instance-type catalog per cloud
+  provider + region, feeding `altinity_node_type`.
+- `altinity_node_types` data source now exposes `id`, `used`, and
+  `capacity` per node type.
+- Versioned pre-commit secret scan (`scripts/check-secrets.sh`,
+  `make install-hooks`, `make check-secrets`) blocking PEM keys, JWTs, and
+  unmasked secret-bearing fixture fields.
+
+### Changed
+
+- Provider registry namespace corrected to `gorgias-oss` across the dev
+  mirror, dev overrides, and all examples/docs.
+- Removed the `make testacc` target and its README mention: no
+  `resource.Test`-style acceptance tests exist yet, so the target only
+  re-ran the offline unit suite while implying live-API coverage.
+
+### Fixed
+
+- Adding `admin_password` to an imported `altinity_clickhouse_cluster` now
+  actually rotates the password. Previously the update was skipped (state
+  held no prior value to diff against) while the new value was still
+  recorded in state — so the API never received it and subsequent applies
+  saw no diff (silent non-rotation).
+- `altinity_clickhouse_keeper.zones` now accepts unknown values (e.g.
+  `zones = data.altinity_zones.this.zones` chained behind a same-apply
+  `altinity_environment`) instead of failing with a framework decode
+  error, matching the cluster's `azlist` behavior.
+- The `altinity_clickhouse_cluster` schema description referenced a
+  nonexistent `altinity_clickhouse_setting` resource; it is
+  `altinity_clickhouse_cluster_setting`.
+- Added import documentation for `altinity_environment` and
+  `altinity_node_type` (the latter imports as
+  `<environment>:<scope>:<code>`, not its state id).
+
+### Security
+
+- Bumped `golang.org/x/net` to v0.56.0 (CVE-2024-45338, CVE-2025-22870,
+  CVE-2025-22872 in the previous indirect pin v0.28.0).
+- Debug-log redaction now masks the opaque `backup_options` /
+  `uptime_settings` / `alternate_endpoints` blobs wholesale (the schema
+  marks them Sensitive because they may carry credentials, but the
+  `TF_LOG=DEBUG` redactor previously logged their contents verbatim), and
+  falls back to substring matching (`pass`/`secret`/`token`/`key`/`cred`)
+  for credential-shaped keys not in the exact-match list (e.g.
+  `secretAccessKey`). A new guard test fails when wire codegen introduces
+  a credential-shaped field the redactor doesn't cover.
+- All GitHub Actions in CI/release workflows are now pinned to release
+  commit SHAs (and bumped to their latest majors), including the action
+  that handles the GPG release-signing key.
+- Removed committed `examples/**/.terraform.lock.hcl` files (pinned a
+  locally-built provider hash that can never match registry artifacts);
+  lock files are now gitignored.
+
 ## [0.1.1] — 2026-06-09
 
 Documentation release — no functional provider changes.
@@ -27,7 +116,7 @@ Documentation release — no functional provider changes.
   internal engineering notes that previously surfaced in `terraform plan`
   output and the Registry. Behavior is unchanged.
 
-## [0.1.0] — TBD
+## [0.1.0] — 2026-06-09
 
 Initial release.
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -101,7 +102,7 @@ func TestKeeperResource_CreateLifecycle(t *testing.T) {
 		InstanceType:    types.StringValue("e2-standard-2"),
 		Image:           types.StringUnknown(),
 		Ha:              types.BoolValue(true),
-		Zones:           []string{"a", "b"},
+		Zones:           types.ListValueMust(types.StringType, []attr.Value{types.StringValue("a"), types.StringValue("b")}),
 		ID:              types.StringUnknown(),
 		CPULimits:       types.StringUnknown(),
 		CPURequests:     types.StringUnknown(),
@@ -120,7 +121,84 @@ func TestKeeperResource_CreateLifecycle(t *testing.T) {
 	assert.Equal(t, "2267:kpr", out.ID.ValueString())
 	assert.Equal(t, "e2-standard-2", out.InstanceType.ValueString())
 	assert.True(t, out.Ha.ValueBool())
-	assert.Equal(t, []string{"a", "b"}, out.Zones)
+	assert.Equal(t, []string{"a", "b"}, stringListToSlice(out.Zones))
+}
+
+// keeperAdoptionServer serves a pre-existing keeper named "kpr" and records
+// whether a launch POST was attempted.
+func keeperAdoptionServer(t *testing.T, launched *bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_, _ = w.Write([]byte(`{"data":{"status":"ready"}}`))
+		case strings.HasSuffix(r.URL.Path, "/keepers") && r.Method == http.MethodPost:
+			*launched = true
+			_, _ = w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/keepers"): // GET list — keeper pre-exists
+			_, _ = w.Write([]byte(`{"data":[{"name":"kpr","instanceType":"e2-standard-2","ha":true,"cpuLimits":0}]}`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func adoptionPlan(adopt types.Bool) keeperResourceModel {
+	return keeperResourceModel{
+		Environment:     types.StringValue("2267"),
+		Name:            types.StringValue("kpr"),
+		InstanceType:    types.StringValue("e2-standard-2"),
+		Image:           types.StringUnknown(),
+		Ha:              types.BoolValue(true),
+		Zones:           types.ListNull(types.StringType),
+		AdoptExisting:   adopt,
+		ID:              types.StringUnknown(),
+		CPULimits:       types.StringUnknown(),
+		CPURequests:     types.StringUnknown(),
+		ZoneTopologyKey: types.StringUnknown(),
+		Timeouts:        nullTimeouts(),
+	}
+}
+
+// Create against a pre-existing keeper of the same name must refuse loudly
+// unless adopt_existing = true — same invariant as the cluster resource.
+func TestKeeperResource_CreateRefusesAdoptionByDefault(t *testing.T) {
+	launched := false
+	srv := keeperAdoptionServer(t, &launched)
+	r := &keeperResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
+	s := keeperSchema(t)
+	ctx := context.Background()
+
+	req := resource.CreateRequest{Plan: newKeeperPlan(t, s, adoptionPlan(types.BoolValue(false)))}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
+	r.Create(ctx, req, &resp)
+	require.True(t, resp.Diagnostics.HasError(), "pre-existing keeper must refuse adoption by default")
+	assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "adopt_existing = true")
+	assert.False(t, launched, "must not launch over a pre-existing keeper")
+}
+
+// With adopt_existing = true, a pre-existing keeper is adopted (no launch)
+// and lands in state.
+func TestKeeperResource_CreateAdoptsWhenOptedIn(t *testing.T) {
+	launched := false
+	srv := keeperAdoptionServer(t, &launched)
+	r := &keeperResource{client: acm.NewClient(srv.URL, "t", acm.WithHTTPClient(srv.Client()))}
+	s := keeperSchema(t)
+	ctx := context.Background()
+
+	req := resource.CreateRequest{Plan: newKeeperPlan(t, s, adoptionPlan(types.BoolValue(true)))}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: emptyObjectValue(ctx, s)}}
+	r.Create(ctx, req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "adopt diags: %v", resp.Diagnostics)
+	assert.False(t, launched, "adoption must not re-launch")
+
+	var out keeperResourceModel
+	require.False(t, resp.State.Get(ctx, &out).HasError())
+	assert.Equal(t, "2267:kpr", out.ID.ValueString())
+	assert.True(t, out.AdoptExisting.ValueBool())
 }
 
 func TestKeeperResource_ReadDriftRemoves(t *testing.T) {
@@ -138,6 +216,7 @@ func TestKeeperResource_ReadDriftRemoves(t *testing.T) {
 		Environment: types.StringValue("2267"),
 		Name:        types.StringValue("kpr"),
 		Ha:          types.BoolValue(false),
+		Zones:       types.ListNull(types.StringType),
 		Timeouts:    nullTimeouts(),
 	}
 	req := resource.ReadRequest{State: newKeeperState(t, s, prior)}
