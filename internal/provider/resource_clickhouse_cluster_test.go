@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -489,6 +490,55 @@ func TestValidateClusterModel_ZookeeperOnly(t *testing.T) {
 	require.False(t, validateClusterModel(cfg).HasError())
 }
 
+// publicWarnings filters the rule-3 "public endpoint without allowlist"
+// warnings out of a diagnostics set.
+func publicWarnings(diags diag.Diagnostics) int {
+	n := 0
+	for _, d := range diags.Warnings() {
+		if strings.Contains(d.Summary(), "Public endpoint") {
+			n++
+		}
+	}
+	return n
+}
+
+// Rule 3: an explicitly public endpoint with no ip_whitelist must surface a
+// plan-time warning (not an error — internet exposure can be intentional).
+func TestValidateClusterModel_PublicEndpointNoWhitelist_Warns(t *testing.T) {
+	cfg := baseStateConsistent()
+	cfg.PublicEndpoint = types.BoolValue(true)
+	cfg.IPWhitelist = types.StringNull()
+
+	diags := validateClusterModel(cfg)
+	require.False(t, diags.HasError())
+	assert.Equal(t, 1, publicWarnings(diags), "explicit public endpoint without allowlist must warn")
+}
+
+// Rule 3 stays quiet when the operator restricted access, opted into
+// "anywhere" explicitly, left public_endpoint unset (private default), or the
+// whitelist is not yet known.
+func TestValidateClusterModel_PublicEndpoint_NoWarn(t *testing.T) {
+	restricted := baseStateConsistent()
+	restricted.PublicEndpoint = types.BoolValue(true)
+	restricted.IPWhitelist = types.StringValue("10.0.0.0/8")
+	assert.Zero(t, publicWarnings(validateClusterModel(restricted)), "allowlisted public endpoint must not warn")
+
+	anywhere := baseStateConsistent()
+	anywhere.PublicEndpoint = types.BoolValue(true)
+	anywhere.IPWhitelist = types.StringValue("0.0.0.0/0")
+	assert.Zero(t, publicWarnings(validateClusterModel(anywhere)), "explicit 0.0.0.0/0 silences the warning")
+
+	defaulted := baseStateConsistent()
+	defaulted.PublicEndpoint = types.BoolNull() // raw config: default (false) not yet applied
+	defaulted.IPWhitelist = types.StringNull()
+	assert.Zero(t, publicWarnings(validateClusterModel(defaulted)), "unset public_endpoint (private default) must not warn")
+
+	unknownWl := baseStateConsistent()
+	unknownWl.PublicEndpoint = types.BoolValue(true)
+	unknownWl.IPWhitelist = types.StringUnknown()
+	assert.Zero(t, publicWarnings(validateClusterModel(unknownWl)), "unknown ip_whitelist gets the benefit of the doubt")
+}
+
 // TestUpdateDispatch_ReplicasRescale locks in the fix for the bug where
 // changing `replicas` forced cluster replacement (and cascaded into satellites
 // destroying users/profiles/settings). Replicas — and shards, azlist, and
@@ -619,11 +669,11 @@ func TestUpdateDispatch_AdminPasswordChange(t *testing.T) {
 	assert.Equal(t, "admin", h.userUpdated, "UpdateUser body must carry the admin login")
 }
 
-// When plan and state both omit admin_password (null), the dispatcher must NOT
-// touch the user endpoints. This guards against the import-flow false positive
-// where state.AdminPass is null and a configured plan password would spuriously
-// trigger an update against a state we don't know.
-func TestUpdateDispatch_AdminPasswordNullInState_SkipsUpdate(t *testing.T) {
+// When state.AdminPass is null (post-import) and the operator adds a password
+// to config, the dispatcher MUST rotate: the final State.Set persists the plan
+// password, so skipping the API call would record the password as set without
+// ever sending it (silent non-rotation — no diff on subsequent applies).
+func TestUpdateDispatch_AdminPasswordNullInState_Rotates(t *testing.T) {
 	plan := baseState()
 	plan.AdminUser = types.StringValue("admin")
 	plan.AdminPass = types.StringValue("first-time-password") // user just added it
@@ -634,8 +684,25 @@ func TestUpdateDispatch_AdminPasswordNullInState_SkipsUpdate(t *testing.T) {
 	r, _ := newDispatcherResource(t, h)
 	runUpdate(t, r, plan, state)
 
-	assert.Equal(t, 0, h.usersList, "null state password must not trigger list")
-	assert.Equal(t, 0, h.userUpdate, "null state password must not trigger update")
+	assert.Equal(t, 1, h.usersList, "post-import password add must trigger user list")
+	assert.Equal(t, 1, h.userUpdate, "post-import password add must rotate via UpdateUser")
+	assert.Equal(t, "admin", h.userUpdated)
+}
+
+// When plan.AdminPass is null (attribute absent from config), the dispatcher
+// must NOT touch the user endpoints — write-only semantics, never clear at
+// the API — regardless of what state holds.
+func TestUpdateDispatch_AdminPasswordNullInPlan_SkipsUpdate(t *testing.T) {
+	plan := baseState() // AdminPass null
+	state := baseState()
+	state.AdminPass = types.StringValue("previously-managed")
+
+	h := &recordingHandler{}
+	r, _ := newDispatcherResource(t, h)
+	runUpdate(t, r, plan, state)
+
+	assert.Equal(t, 0, h.usersList, "null plan password must not trigger list")
+	assert.Equal(t, 0, h.userUpdate, "null plan password must not trigger update")
 }
 
 // Same login resolution after import: when only plan.AdminUser is populated

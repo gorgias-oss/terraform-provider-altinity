@@ -45,6 +45,13 @@ var sensitiveBodyKeys = map[string]bool{
 	"datadogsettings": true,
 	"datadogpassword": true,
 	"apikey":          true,
+	// Opaque passthrough blobs the provider schema marks Sensitive because
+	// they may carry credentials (object-storage keys, signed URLs, ...).
+	// Masked wholesale, like datadogsettings — they are config-authoritative
+	// passthroughs, so masking loses nothing diagnostically.
+	"backupoptions":      true,
+	"uptimesettings":     true,
+	"alternateendpoints": true,
 	// AWS / cloud-provider keys carried in Environment payloads
 	"awskey":         true,
 	"awssecretkey":   true,
@@ -61,15 +68,40 @@ var sensitiveBodyKeys = map[string]bool{
 	"secret": true,
 }
 
+// sensitiveKeySubstrings is the fallback for keys NOT in the exact-match list:
+// any key containing one of these (case-insensitive) is masked. This catches
+// realistic credential key names inside opaque payloads (secretAccessKey,
+// s3SecretKey, bearerToken, clientSecret, ...) and future API fields the exact
+// list hasn't caught up with. Over-masking harmless keys (e.g. awsKeyPairName,
+// zoneTopologyKey) in DEBUG logs is the accepted trade-off — these logs exist
+// for request-shape debugging, not for reading values back.
+var sensitiveKeySubstrings = []string{"pass", "secret", "token", "key", "cred"}
+
+// isSensitiveKey reports whether a JSON key must be masked in debug logs:
+// exact match against sensitiveBodyKeys, else substring match against
+// sensitiveKeySubstrings. Both case-insensitive.
+func isSensitiveKey(k string) bool {
+	lk := strings.ToLower(k)
+	if sensitiveBodyKeys[lk] {
+		return true
+	}
+	for _, sub := range sensitiveKeySubstrings {
+		if strings.Contains(lk, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // redactJSON deep-walks a decoded JSON value, replacing the value at any
-// sensitiveBodyKeys-matching key with "***". Matching is case-insensitive so
+// isSensitiveKey-matching key with "***". Matching is case-insensitive so
 // API responses that differ in casing from the spec (or future spec drift) are
 // still scrubbed.
 func redactJSON(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, val := range x {
-			if sensitiveBodyKeys[strings.ToLower(k)] {
+			if isSensitiveKey(k) {
 				x[k] = "***"
 				continue
 			}

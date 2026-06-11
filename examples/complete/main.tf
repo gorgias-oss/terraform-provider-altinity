@@ -101,8 +101,10 @@ resource "altinity_clickhouse_cluster" "demo" {
   version       = data.altinity_clickhouse_versions.this.latest
   azlist        = data.altinity_zones.this.zones
 
-  # host, ports, lb_type, secure, public_endpoint, mysql_*, disks, replicate_schema
-  # all default to the ACM UI's values, so they don't need to be set here.
+  # host, ports, lb_type, secure, mysql_*, disks, replicate_schema all default
+  # to the ACM UI's values, so they don't need to be set here. public_endpoint
+  # deliberately defaults to false (private) — set it to true AND pair it with
+  # ip_whitelist if the cluster must be reachable from the internet.
 
   # Coordination — pick ONE:
   #  - keeper_name: attach to the shared CH Keeper created above (used here).

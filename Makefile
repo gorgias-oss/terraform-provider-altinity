@@ -1,4 +1,4 @@
-.PHONY: build test testacc lint docs install fmt vet tidy generate release-notes release-snapshot install-hooks check-secrets
+.PHONY: build test lint docs install fmt vet tidy generate release-notes release-snapshot install-hooks check-secrets
 
 BINARY := bin/terraform-provider-altinity
 
@@ -15,10 +15,6 @@ build:
 
 test:
 	go test -race -count=1 ./...
-
-# Acceptance tests are gated on TF_ACC + a live token/env; offline by default.
-testacc:
-	TF_ACC=1 go test -race -count=1 -timeout 120m ./internal/provider/...
 
 lint: vet
 	@command -v staticcheck >/dev/null && staticcheck ./... || echo "staticcheck not installed, skipping"
