@@ -58,6 +58,7 @@ var allowedOps = []string{
 	"ClusterStatus",       // GET    /cluster/{cluster}/status
 	"ClusterRescale",      // PUT    /cluster/{id}/rescale
 	"ClusterUpgrade",      // PUT    /cluster/{id}/upgrade
+	"ClusterEdit",         // POST   /cluster/{id} (general info: ipWhitelist, ...)
 	"ClusterBackupCreate", // POST   /cluster/{id}/backup
 	"ClusterRemove",       // DELETE /cluster/{id}/{terminate}
 	// Cluster settings.

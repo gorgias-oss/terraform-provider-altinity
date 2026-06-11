@@ -23,6 +23,7 @@ import (
 	fwvalidator "github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -143,9 +144,9 @@ func TestClusterResource_SchemaValid(t *testing.T) {
 	// Spot-check that the key attributes exist with the expected shape.
 	for _, name := range []string{
 		"id", "environment", "name", "node_count", "shards", "replicas",
-		"node_type", "memory", "size", "storage_class", "volume_type", "iops",
+		"node_type", "memory", "size", "storage_class", "iops",
 		"throughput", "disks", "version", "version_image", "zookeeper",
-		"keeper_name", "zone_awareness", "azlist", "secure", "port", "http_port",
+		"keeper_name", "zone_awareness", "azlist", "secure",
 		"lb_type", "ip_whitelist", "admin_password", "datadog", "backup_options",
 		"timeouts",
 	} {
@@ -209,28 +210,30 @@ func TestClusterResource_RequiresReplace(t *testing.T) {
 	s := clusterSchema(t)
 
 	// Identity / not-provably-mutable attrs must force replacement (conservative
-	// default §7.2). The rank-4 fields (uptime, datadog, uptime_settings,
-	// alternate_endpoints) have no confirmed in-place endpoint yet, so they
-	// stay RequiresReplace rather than being silently dropped on Update
-	// (review #2, design §7.2).
+	// default §7.2). zone_awareness and mysql_protocol ARE in the ClusterEdit
+	// body but with an unreliable int-vs-bool wire encoding (see the schema
+	// comments), so they stay RequiresReplace pending a live spike.
 	for _, name := range []string{
-		"environment", "name", "zookeeper", "keeper_name",
-		"zone_awareness", "secure", "port", "http_port",
-		"volume_type", "data_path", "lb_type", "ip_whitelist",
-		"uptime", "datadog", "uptime_settings", "alternate_endpoints",
+		"environment", "type", "zookeeper", "keeper_name",
+		"zone_awareness", "secure", "public_endpoint", "mysql_protocol",
+		"replicate_schema", "data_path", "admin_user",
 	} {
 		assert.Truef(t, hasRequiresReplace(t, s, name),
 			"%q should carry a RequiresReplace plan modifier", name)
 	}
 
-	// In-place-mutable attrs go through the rescale / upgrade / password
-	// dispatcher and must NOT force replacement — destroying a production
-	// cluster for a +1-replica scale-out is the bug the spec rejects.
+	// In-place-mutable attrs go through the rescale / upgrade / edit /
+	// password dispatcher and must NOT force replacement — destroying a
+	// production cluster for a +1-replica scale-out (or an allow-list tweak)
+	// is the bug the spec rejects.
 	for _, name := range []string{
 		"size", "storage_class", "node_type", "memory", "version",
 		"version_image", "node_count", "iops", "throughput", "disks",
 		"admin_password",
 		"shards", "replicas", "azlist",
+		// ClusterEdit sub-domain (POST /cluster/{id}).
+		"name", "role", "lb_type", "ip_whitelist", "mysql_port",
+		"timezone", "uptime", "uptime_settings", "alternate_endpoints", "datadog",
 	} {
 		assert.Falsef(t, hasRequiresReplace(t, s, name),
 			"%q is mutable in place and must NOT RequiresReplace", name)
@@ -239,23 +242,25 @@ func TestClusterResource_RequiresReplace(t *testing.T) {
 
 // TestClusterResource_RequiresReplaceModifierFires drives the actual modifier
 // with a populated update-scenario request to confirm it flips RequiresReplace.
+// Uses environment — the canonical identity attribute (name became mutable in
+// place via ClusterEdit in 0.3.0).
 func TestClusterResource_RequiresReplaceModifierFires(t *testing.T) {
 	s := clusterSchema(t)
-	attr := s.Attributes["name"].(rschema.StringAttribute)
+	attr := s.Attributes["environment"].(rschema.StringAttribute)
 	ctx := context.Background()
 
 	// Build a minimal update-scenario Plan/State (non-null) so the modifier's
 	// "planned for update" guard passes and the changed value triggers replace.
-	plan := newPlan(t, s, func() clusterResourceModel { m := baseState(); m.Name = types.StringValue("renamed"); return m }())
+	plan := newPlan(t, s, func() clusterResourceModel { m := baseState(); m.Environment = types.StringValue("9999"); return m }())
 	state := newState(t, s, baseState())
 
 	var fired bool
 	for _, pm := range attr.StringPlanModifiers() {
 		req := planmodifier.StringRequest{
-			Path:        path.Root("name"),
-			ConfigValue: types.StringValue("renamed"),
-			PlanValue:   types.StringValue("renamed"),
-			StateValue:  types.StringValue("c1"),
+			Path:        path.Root("environment"),
+			ConfigValue: types.StringValue("9999"),
+			PlanValue:   types.StringValue("9999"),
+			StateValue:  types.StringValue("2267"),
 			Plan:        plan,
 			State:       state,
 		}
@@ -265,7 +270,61 @@ func TestClusterResource_RequiresReplaceModifierFires(t *testing.T) {
 			fired = true
 		}
 	}
-	assert.True(t, fired, "name change must trigger RequiresReplace when planned for update")
+	assert.True(t, fired, "environment change must trigger RequiresReplace when planned for update")
+}
+
+// ---- schema v0 -> v1 state upgrade ----
+
+// TestClusterResource_UpgradeStateV0DropsRemovedAttrs: a v0 state file still
+// carries volume_type/host/port/http_port/ssh_port (removed in v1). The
+// upgrader must strip them and re-decode cleanly against the v1 schema,
+// passing every surviving attribute through unchanged.
+func TestClusterResource_UpgradeStateV0DropsRemovedAttrs(t *testing.T) {
+	r := NewClusterResource().(*clusterResource)
+	ctx := context.Background()
+
+	upgraders := r.UpgradeState(ctx)
+	up, ok := upgraders[0]
+	require.True(t, ok, "an upgrader must be registered for schema version 0")
+
+	v0 := `{
+		"id": "42",
+		"environment": "2267",
+		"name": "c1",
+		"shards": 1,
+		"replicas": 2,
+		"ip_whitelist": "10.0.0.0/8",
+		"volume_type": "gp3",
+		"host": "localhost",
+		"port": 9900,
+		"http_port": 5123,
+		"ssh_port": 2222
+	}`
+	var resp resource.UpgradeStateResponse
+	up.StateUpgrader(ctx, resource.UpgradeStateRequest{
+		RawState: &tfprotov6.RawState{JSON: []byte(v0)},
+	}, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "upgrade diags: %v", resp.Diagnostics)
+	require.NotNil(t, resp.DynamicValue, "upgrader must produce a dynamic value")
+
+	// Decode the upgraded value against the v1 schema and check passthrough.
+	s := clusterSchema(t)
+	typ := s.Type().TerraformType(ctx)
+	val, err := resp.DynamicValue.Unmarshal(typ)
+	require.NoError(t, err, "upgraded state must conform to the v1 schema type")
+
+	var obj map[string]tftypes.Value
+	require.NoError(t, val.As(&obj))
+	for _, k := range []string{"volume_type", "host", "port", "http_port", "ssh_port"} {
+		_, present := obj[k]
+		assert.Falsef(t, present, "removed attribute %q must not survive the upgrade", k)
+	}
+	var name string
+	require.NoError(t, obj["name"].As(&name))
+	assert.Equal(t, "c1", name, "surviving attributes must pass through unchanged")
+	var wl string
+	require.NoError(t, obj["ip_whitelist"].As(&wl))
+	assert.Equal(t, "10.0.0.0/8", wl)
 }
 
 // ---- ImportState id parsing ----
@@ -297,6 +356,8 @@ type recordingHandler struct {
 	upgrade  int
 	rescale  int
 	backup   int
+	edit     int
+	editBody string // last body POSTed to /cluster/{id} (ClusterEdit)
 	statusN  int
 	clusterN int
 	// User endpoints for the admin-password step.
@@ -337,6 +398,12 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = `{"data":[{"id":7,"login":"admin"}]}`
 		}
 		_, _ = w.Write([]byte(body))
+	case strings.HasPrefix(p, "/cluster/") && !strings.Contains(strings.TrimPrefix(p, "/cluster/"), "/") && r.Method == http.MethodPost:
+		// POST /cluster/{id} — ClusterEdit (general-info, e.g. ip_whitelist).
+		h.edit++
+		body, _ := io.ReadAll(r.Body)
+		h.editBody = string(body)
+		_, _ = w.Write([]byte(`{"data":{"id":42,"name":"c1"}}`))
 	case strings.Contains(p, "/user/") && r.Method == http.MethodPost:
 		h.userUpdate++
 		// Parse {"login":"...","password":"..."} to record what was sent.
@@ -413,6 +480,77 @@ func TestUpdateDispatch_RescaleOnly(t *testing.T) {
 	assert.Equal(t, 0, h.upgrade)
 	assert.Equal(t, 1, h.rescale, "node_type change must fire rescale")
 	assert.Equal(t, 0, h.backup)
+	assert.Equal(t, 0, h.edit)
+}
+
+// TestUpdateDispatch_EditOnly: an ip_whitelist change routes to ClusterEdit
+// (POST /cluster/{id}) in place — no upgrade, no rescale, and crucially no
+// destroy/recreate (the attribute carries no RequiresReplace modifier; see
+// TestClusterResource_RequiresReplace).
+func TestUpdateDispatch_EditOnly(t *testing.T) {
+	state := baseState()
+	state.IPWhitelist = types.StringValue("10.0.0.0/8")
+	plan := state
+	plan.IPWhitelist = types.StringValue("10.0.0.0/8,192.168.0.0/16")
+
+	h := &recordingHandler{}
+	r, _ := newDispatcherResource(t, h)
+	resp := runUpdate(t, r, plan, state)
+
+	assert.Equal(t, 0, h.upgrade)
+	assert.Equal(t, 0, h.rescale)
+	assert.Equal(t, 0, h.backup)
+	assert.Equal(t, 1, h.edit, "ip_whitelist change must fire ClusterEdit")
+	assert.JSONEq(t, `{"ipWhitelist":"10.0.0.0/8,192.168.0.0/16"}`, h.editBody)
+
+	// ip_whitelist is never read back by ACM, so the final state must carry
+	// the plan value verbatim (state-after-apply == plan, §7.1).
+	var out clusterResourceModel
+	require.False(t, resp.State.Get(context.Background(), &out).HasError())
+	assert.Equal(t, "10.0.0.0/8,192.168.0.0/16", out.IPWhitelist.ValueString())
+}
+
+// TestUpdateDispatch_RenameInPlace: a name change is a ClusterEdit, not a
+// destroy/recreate — the rename ships on the wire and the plan value lands in
+// state (ACM re-derives the endpoints, picked up by the converged re-read).
+func TestUpdateDispatch_RenameInPlace(t *testing.T) {
+	plan := baseState()
+	plan.Name = types.StringValue("c1-renamed")
+
+	h := &recordingHandler{}
+	r, _ := newDispatcherResource(t, h)
+	resp := runUpdate(t, r, plan, baseState())
+
+	assert.Equal(t, 1, h.edit, "rename must fire ClusterEdit")
+	assert.JSONEq(t, `{"name":"c1-renamed"}`, h.editBody)
+
+	var out clusterResourceModel
+	require.False(t, resp.State.Get(context.Background(), &out).HasError())
+	assert.Equal(t, "c1-renamed", out.Name.ValueString())
+}
+
+// TestUpdateDispatch_EditClear: removing ip_whitelist from config sends an
+// explicit empty string (the attribute is never read back, so skipping the
+// call would leave ACM enforcing a list that state no longer records).
+func TestUpdateDispatch_EditClear(t *testing.T) {
+	state := baseState()
+	state.IPWhitelist = types.StringValue("10.0.0.0/8")
+	plan := state
+	plan.IPWhitelist = types.StringNull()
+
+	h := &recordingHandler{}
+	r, _ := newDispatcherResource(t, h)
+	resp := runUpdate(t, r, plan, state)
+
+	assert.Equal(t, 1, h.edit)
+	assert.JSONEq(t, `{"ipWhitelist":""}`, h.editBody)
+
+	// State must record the cleared attribute as null (matching the plan),
+	// not as an empty string — a "" in state would be a perpetual diff
+	// against the omitted attribute in config.
+	var out clusterResourceModel
+	require.False(t, resp.State.Get(context.Background(), &out).HasError())
+	assert.True(t, out.IPWhitelist.IsNull(), "cleared ip_whitelist must be null in state, not \"\"")
 }
 
 // TestValidateClusterModel_NodeCountMismatch locks in the rule that
@@ -596,6 +734,7 @@ func TestUpdateDispatch_All(t *testing.T) {
 	plan.Version = types.StringValue("24.8")
 	plan.Replicas = types.Int64Value(3) // topology change triggers rescale
 	plan.BackupOptions = types.StringValue(`{"schedule":"daily"}`)
+	plan.IPWhitelist = types.StringValue("10.0.0.0/8") // general-info edit
 
 	h := &recordingHandler{}
 	r, _ := newDispatcherResource(t, h)
@@ -604,6 +743,10 @@ func TestUpdateDispatch_All(t *testing.T) {
 	assert.Equal(t, 1, h.upgrade)
 	assert.Equal(t, 1, h.rescale)
 	assert.Equal(t, 1, h.backup)
+	// editDiff is computed up-front from the original plan/state, so the
+	// reReadAndStore calls of the earlier steps must not swallow the edit.
+	assert.Equal(t, 1, h.edit)
+	assert.JSONEq(t, `{"ipWhitelist":"10.0.0.0/8"}`, h.editBody)
 }
 
 func TestUpdateDispatch_NoChange(t *testing.T) {
@@ -765,7 +908,6 @@ func TestLaunchRequestFromPlan_Coercions(t *testing.T) {
 		Secure:        types.BoolValue(true),
 		ZoneAwareness: types.BoolValue(false),
 		MysqlProtocol: types.BoolValue(true),
-		Port:          types.Int64Value(9440),
 		Datadog:       types.StringValue(`{"apiKey":"x"}`),
 	}
 	req := launchRequestFromPlan(p)
@@ -776,8 +918,13 @@ func TestLaunchRequestFromPlan_Coercions(t *testing.T) {
 	assert.Equal(t, true, req.Secure, "secure is a JSON boolean")
 	assert.Equal(t, false, req.ZoneAwareness)
 	assert.Equal(t, true, req.MysqlProtocol)
-	assert.Equal(t, 9440, req.Port)
 	assert.Equal(t, `{"apiKey":"x"}`, string(req.DatadogSettings))
+	// ACM-internal launch plumbing is pinned to the ACM-UI payload values —
+	// no attributes back these any more (removed in 0.3.0).
+	assert.Equal(t, "localhost", req.Host)
+	assert.Equal(t, 9900, req.Port)
+	assert.Equal(t, 5123, req.HTTPPort)
+	assert.Equal(t, 2222, req.SSHPort)
 }
 
 func TestApplyClusterToModel_PreservesSecrets(t *testing.T) {
@@ -854,6 +1001,78 @@ func TestDiffHelpers(t *testing.T) {
 	un.Version = types.StringUnknown()
 	_, changed = upgradeDiff(un, base)
 	assert.False(t, changed, "unknown plan value must not trigger a sub-mutation")
+
+	// edit (ClusterEdit) — ip_whitelist changes in place, never replaces.
+	wlState := base
+	wlState.IPWhitelist = types.StringValue("10.0.0.0/8")
+	wl := wlState
+	wl.IPWhitelist = types.StringValue("10.0.0.0/8,192.168.0.0/16")
+	editReq, changed := editDiff(wl, wlState)
+	assert.True(t, changed)
+	require.NotNil(t, editReq.IPWhitelist)
+	assert.Equal(t, "10.0.0.0/8,192.168.0.0/16", *editReq.IPWhitelist)
+
+	_, changed = editDiff(wlState, wlState)
+	assert.False(t, changed, "identical ip_whitelist must not trigger an edit")
+
+	// Removing the attribute (null plan vs set state) must send an explicit
+	// clear — ip_whitelist is not read back, so a silent skip would leave ACM
+	// enforcing a list state no longer records.
+	wlCleared := wlState
+	wlCleared.IPWhitelist = types.StringNull()
+	editReq, changed = editDiff(wlCleared, wlState)
+	assert.True(t, changed)
+	require.NotNil(t, editReq.IPWhitelist)
+	assert.Equal(t, "", *editReq.IPWhitelist, "null plan must clear the allow-list explicitly")
+
+	// Unknown plan value => no edit (consistent with the other diff helpers).
+	wlUnknown := wlState
+	wlUnknown.IPWhitelist = types.StringUnknown()
+	_, changed = editDiff(wlUnknown, wlState)
+	assert.False(t, changed, "unknown ip_whitelist must not trigger an edit")
+
+	// Other ClusterEdit scalars: only the changed field is set on the request.
+	rn := base
+	rn.Name = types.StringValue("c1-renamed")
+	rn.Timezone = types.StringValue("Etc/UTC")
+	rn.MysqlPort = types.Int64Value(9005)
+	editReq, changed = editDiff(rn, base)
+	assert.True(t, changed)
+	require.NotNil(t, editReq.Name)
+	assert.Equal(t, "c1-renamed", *editReq.Name)
+	require.NotNil(t, editReq.Timezone)
+	assert.Equal(t, "Etc/UTC", *editReq.Timezone)
+	require.NotNil(t, editReq.MysqlPort)
+	assert.Equal(t, 9005, *editReq.MysqlPort)
+	assert.Nil(t, editReq.Role, "unchanged fields must be omitted (nil)")
+	assert.Nil(t, editReq.IPWhitelist)
+
+	// Opaque JSON blocks: a value change is sent through; removing the
+	// attribute (null plan) is skipped — clearing semantics are unverified, so
+	// the explicit "{}"/"[]" escape hatch documented on the attributes applies.
+	ddState := base
+	ddState.Datadog = types.StringValue(`{"apiKey":"old"}`)
+	dd := ddState
+	dd.Datadog = types.StringValue(`{"apiKey":"new"}`)
+	editReq, changed = editDiff(dd, ddState)
+	assert.True(t, changed)
+	assert.JSONEq(t, `{"apiKey":"new"}`, string(editReq.DatadogSettings))
+
+	ddRemoved := ddState
+	ddRemoved.Datadog = types.StringNull()
+	_, changed = editDiff(ddRemoved, ddState)
+	assert.False(t, changed, "removing an opaque block must skip the field (clear semantics unverified)")
+
+	// Removing an Optional+Computed scalar (null plan vs set state) must NOT
+	// send an empty-string clear — only ip_whitelist has null-means-clear
+	// semantics. (In real plans these keep their prior value via
+	// Optional+Computed; this guards the defensive path.)
+	tzState := base
+	tzState.Timezone = types.StringValue("Etc/UTC")
+	tzRemoved := tzState
+	tzRemoved.Timezone = types.StringNull()
+	_, changed = editDiff(tzRemoved, tzState)
+	assert.False(t, changed, "null timezone plan must not clear the timezone at ACM")
 }
 
 // ---- Create / Read / Delete lifecycle (httptest) ----
@@ -1053,9 +1272,9 @@ func TestClusterResource_Create_NoUnknownState(t *testing.T) {
 	ctx := context.Background()
 
 	// Minimal plan: required attrs + admin_password known. Computed attrs the API
-	// does not read back are unknown in the plan (as if omitted). volume_type/
-	// data_path/zookeeper/ip_whitelist are Optional-only (NOT Computed) — a real
-	// plan supplies them as null, never unknown — so they are set null here.
+	// does not read back are unknown in the plan (as if omitted). data_path/
+	// zookeeper/ip_whitelist are Optional-only (NOT Computed) — a real plan
+	// supplies them as null, never unknown — so they are set null here.
 	plan := baseState()
 	plan.ID = types.StringNull()
 	plan.AdminPass = types.StringValue("pw")
@@ -1063,15 +1282,12 @@ func TestClusterResource_Create_NoUnknownState(t *testing.T) {
 	plan.Memory = types.StringUnknown()
 	plan.Size = types.StringUnknown()
 	plan.StorageClass = types.StringUnknown()
-	plan.VolumeType = types.StringNull()
 	plan.IOPS = types.Int64Unknown()
 	plan.Throughput = types.Int64Unknown()
 	plan.Disks = types.Int64Unknown()
 	plan.DataPath = types.StringNull()
 	plan.VersionImage = types.StringUnknown()
 	plan.Zookeeper = types.StringNull()
-	plan.Port = types.Int64Unknown()
-	plan.HTTPPort = types.Int64Unknown()
 	plan.LBType = types.StringUnknown()
 	plan.IPWhitelist = types.StringNull()
 
@@ -1087,12 +1303,11 @@ func TestClusterResource_Create_NoUnknownState(t *testing.T) {
 	unknowns := map[string]bool{
 		"node_type": out.NodeType.IsUnknown(), "memory": out.Memory.IsUnknown(),
 		"size": out.Size.IsUnknown(), "storage_class": out.StorageClass.IsUnknown(),
-		"volume_type": out.VolumeType.IsUnknown(), "iops": out.IOPS.IsUnknown(),
+		"iops":       out.IOPS.IsUnknown(),
 		"throughput": out.Throughput.IsUnknown(), "disks": out.Disks.IsUnknown(),
 		"data_path": out.DataPath.IsUnknown(), "version_image": out.VersionImage.IsUnknown(),
 		"zookeeper": out.Zookeeper.IsUnknown(),
-		"port":      out.Port.IsUnknown(), "http_port": out.HTTPPort.IsUnknown(),
-		"lb_type": out.LBType.IsUnknown(), "ip_whitelist": out.IPWhitelist.IsUnknown(),
+		"lb_type":   out.LBType.IsUnknown(), "ip_whitelist": out.IPWhitelist.IsUnknown(),
 	}
 	for name, isUnknown := range unknowns {
 		assert.Falsef(t, isUnknown, "%q must be known (not unknown) after apply", name)
@@ -1228,6 +1443,19 @@ func TestValidateAdoptedCluster(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// role is mutable in place via ClusterEdit since 0.3.0, so an
+			// adopted cluster with a different role is reconciled by the next
+			// apply instead of blocking adoption.
+			name: "role mismatch alone does not block adoption",
+			plan: fullPlan(),
+			api: func() acm.Cluster {
+				c := matchingAPI()
+				c.Role = "dev"
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
 			name: "multiple mismatches enumerated",
 			plan: fullPlan(),
 			api: func() acm.Cluster {
@@ -1238,7 +1466,8 @@ func TestValidateAdoptedCluster(t *testing.T) {
 				return c
 			}(),
 			wantErr:     true,
-			errContains: []string{"type", "role", "shards"},
+			errContains: []string{"type", "shards"},
+			errExcludes: []string{"role"},
 		},
 	}
 

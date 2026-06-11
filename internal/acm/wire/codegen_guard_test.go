@@ -22,6 +22,7 @@ var allowlistForGuard = []string{
 	"ClusterStatus",
 	"ClusterRescale",
 	"ClusterUpgrade",
+	"ClusterEdit",
 	"ClusterBackupCreate",
 	"ClusterRemove",
 	"ClusterSettingList",
