@@ -4,7 +4,7 @@ BINARY := bin/terraform-provider-altinity
 
 # Local filesystem mirror for `terraform`/`tofu` dev_overrides.
 HOSTNAME := registry.terraform.io
-NAMESPACE := gorgias
+NAMESPACE := gorgias-oss
 NAME := altinity
 VERSION := 0.1.0
 OS_ARCH := $(shell go env GOOS)_$(shell go env GOARCH)

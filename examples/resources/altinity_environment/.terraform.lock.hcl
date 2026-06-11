@@ -1,11 +1,11 @@
 # This file is maintained automatically by "terraform init".
 # Manual edits may be lost in future updates.
 
-provider "registry.terraform.io/gorgias/altinity" {
+provider "registry.terraform.io/gorgias-oss/altinity" {
   version     = "0.1.0"
   constraints = ">= 0.1.0"
   hashes = [
-    "h1:mOaaKM8vhY5uwz2GGxJg+bmkxypeVHwFQdSPj/7BAkU=",
+    "h1:HLPloD9L14+OpnLa8XyBxAWQPxMGBYvVbA5srRnNOZg=",
   ]
 }
 
