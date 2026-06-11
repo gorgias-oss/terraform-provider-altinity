@@ -117,6 +117,39 @@ type UpgradeRequest struct {
 	VersionImage string `json:"versionImage,omitempty"`
 }
 
+// EditRequest is the body for POST /cluster/{id} (operationId ClusterEdit,
+// "Modifies a cluster general information"). It covers config-only attributes
+// ACM mutates in place on a running cluster — no relaunch, no data movement.
+// Scalar fields are pointers so "leave unchanged" (nil, omitted from the JSON)
+// is distinguishable from "clear" (pointer to the zero value, sent explicitly;
+// note `omitempty` only drops nil pointers, never a pointer to "").
+//
+// Spec-confirmed fields NOT modeled here: mysqlProtocol and zoneAwareness are
+// declared `integer enum [0,1]` in the edit body, but the same spec made that
+// claim for the LAUNCH body where the backend live-rejects ints and wants JSON
+// booleans (see LaunchRequest). Until a live spike settles the edit-side wire
+// type, the corresponding attributes stay RequiresReplace in the resource.
+type EditRequest struct {
+	// Name renames the cluster. ACM derives endpoint hostnames from the
+	// cluster name, so a rename also changes the cluster's endpoints.
+	Name *string `json:"name,omitempty"`
+	// Role is the cluster role code ("prod" or "dev").
+	Role   *string `json:"role,omitempty"`
+	LBType *string `json:"lbType,omitempty"`
+	// IPWhitelist is the comma-separated CIDR allow-list applied to the
+	// cluster's endpoints. An explicit empty string clears the list.
+	IPWhitelist *string `json:"ipWhitelist,omitempty"`
+	MysqlPort   *int    `json:"mysqlPort,omitempty"`
+	Timezone    *string `json:"timezone,omitempty"`
+	Uptime      *string `json:"uptime,omitempty"`
+
+	// Opaque object passthroughs — same raw-JSON convention as LaunchRequest.
+	// TODO(spike): typed nested blocks.
+	UptimeSettings     json.RawMessage `json:"uptimeSettings,omitempty"`
+	AlternateEndpoints json.RawMessage `json:"alternateEndpoints,omitempty"`
+	DatadogSettings    json.RawMessage `json:"datadogSettings,omitempty"`
+}
+
 // clusterIDArg renders an int64 cluster id as the path-arg string.
 func clusterIDArg(id int64) string { return strconv.FormatInt(id, 10) }
 
@@ -285,6 +318,15 @@ func (c *Client) RescaleCluster(ctx context.Context, id int64, req RescaleReques
 func (c *Client) UpgradeCluster(ctx context.Context, id int64, req UpgradeRequest) error {
 	args := map[string]string{"id": clusterIDArg(id)}
 	return c.doJSON(ctx, wire.OpClusterUpgrade, args, req, nil)
+}
+
+// EditCluster applies in-place edits to a cluster's general configuration
+// (POST /cluster/{id}). Config-only per design §7.2: the caller still polls
+// to idle/healthy afterwards in case ACM schedules an operator action (e.g.
+// re-rendering load balancer rules after an ipWhitelist change).
+func (c *Client) EditCluster(ctx context.Context, id int64, req EditRequest) error {
+	args := map[string]string{"id": clusterIDArg(id)}
+	return c.doJSON(ctx, wire.OpClusterEdit, args, req, nil)
 }
 
 // TerminateCluster deletes a cluster (DELETE /cluster/{id}/{terminate}). The

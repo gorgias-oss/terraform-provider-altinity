@@ -86,49 +86,44 @@ resource "altinity_clickhouse_cluster" "example" {
 ### Required
 
 - `environment` (String) The ACM environment id to launch the cluster in. Changing this forces replacement.
-- `name` (String) The cluster name. Changing this forces replacement.
+- `name` (String) The cluster name. Renamed in place via the cluster edit API. NOTE: ACM derives the cluster's endpoint hostnames from the name, so a rename changes `endpoint`/`endpoint_http` — update any consumers accordingly.
 
 ### Optional
 
 - `admin_password` (String, Sensitive) Admin user password. Write-only at the API (never returned on Read); preserved from prior state. Changing this updates the admin user's password in place via the DB user API.
 - `admin_user` (String) Cluster admin username. Required alongside admin_password (launching with a password but no user errors). Defaults to "admin".
 - `adopt_existing` (Boolean) If true, Create will adopt an existing cluster of the same name in the target environment instead of erroring. Default false — a cluster created out-of-band (or by another team using the same ACM token) will NOT be silently placed under Terraform management. Set to true only when you intend to take over a pre-existing cluster, e.g. when migrating an ACM-UI-created cluster into IaC. Adoption still validates that immutable topology fields match the plan.
-- `alternate_endpoints` (String, Sensitive) Alternate endpoints (`alternateEndpoints`), supplied as a raw JSON string. Sensitive because it may carry credentials. Changing this forces replacement of the cluster.
+- `alternate_endpoints` (String, Sensitive) Alternate endpoints (`alternateEndpoints`), supplied as a raw JSON string. Sensitive because it may carry credentials. Updated in place via the cluster edit API. Removing the attribute leaves the last-applied settings active at ACM (not read back; send `"[]"` to clear explicitly).
 - `azlist` (List of String) Availability zones to place nodes in (e.g. from the altinity_zones data source). Mutable in place via rescale (changing the AZ set rebalances nodes; it does NOT destroy the cluster).
 - `backup_options` (String, Sensitive) Backup schedule configuration (`backupOptions`), supplied as a raw JSON string. Sensitive because it may carry credentials (e.g. object-storage keys).
 - `data_path` (String) Data path (storage policy). Changing this forces replacement.
-- `datadog` (String, Sensitive) Datadog integration settings (`datadogSettings`), supplied as a raw JSON string. Sensitive because it contains the Datadog API key when set. Changing this forces replacement of the cluster.
+- `datadog` (String, Sensitive) Datadog integration settings (`datadogSettings`), supplied as a raw JSON string. Sensitive because it contains the Datadog API key when set. Updated in place via the cluster edit API. Removing the attribute leaves the last-applied settings active at ACM (not read back; send `"{}"` to clear explicitly).
 - `disks` (Number) Number of disks (default 1). Mutable in place via rescale.
-- `host` (String) Cluster host (ACM-UI default "localhost"). ACM uses this as the internal bind host; operators typically leave it at the default. Changing this on an existing cluster forces replacement.
-- `http_port` (Number) HTTP protocol port (ACM-UI default 5123 — NOT the upstream ClickHouse default of 8123). Override only if you have a specific reason to deviate from ACM's launch defaults. Changing this on an existing cluster forces replacement.
 - `iops` (Number) Provisioned IOPS. Mutable in place via rescale.
-- `ip_whitelist` (String) IP allow-list (comma-separated CIDRs). Changing this forces replacement of the cluster.
+- `ip_whitelist` (String) IP allow-list (comma-separated CIDRs). Updated in place via the cluster edit API; removing the attribute clears the allow-list (the endpoint becomes unrestricted — see `public_endpoint`).
 - `keeper_name` (String) Keeper name. Changing this forces replacement.
-- `lb_type` (String) Load balancer type (default `"ingress"`). Changing this forces replacement of the cluster.
+- `lb_type` (String) Load balancer type (default `"ingress"`). Updated in place via the cluster edit API.
 - `memory` (String) Memory request. Mutable in place via rescale.
-- `mysql_port` (Number) MySQL protocol port (ACM-UI default 9004 — matches upstream ClickHouse). Only relevant when `mysql_protocol = true`. Changing this on an existing cluster forces replacement.
+- `mysql_port` (Number) MySQL protocol port (ACM-UI default 9004 — matches upstream ClickHouse). Only relevant when `mysql_protocol = true`. Updated in place via the cluster edit API.
 - `mysql_protocol` (Boolean) Enable the MySQL protocol (default false). Changing this forces replacement.
 - `node_count` (Number) Number of nodes (maps to ACM `nodes`). Mutable in place via rescale.
 - `node_type` (String) The node type code (e.g. n2d-standard-2). Mutable in place via rescale.
-- `port` (Number) Native protocol port (ACM-UI default 9900 — NOT the upstream ClickHouse default of 9000). Override only if you have a specific reason to deviate from ACM's launch defaults; this is wired through to ACM at launch and is not echoed back, so the configured value is authoritative. Changing this on an existing cluster forces replacement.
 - `public_endpoint` (Boolean) Expose a public endpoint (default `false`). When `true` the cluster endpoint is reachable from the internet unless `ip_whitelist` restricts it — set both deliberately. Changing this forces replacement.
 - `replicas` (Number) Number of replicas per shard. Mutable in place via rescale (scale-out adds redundancy; scale-in removes replicas).
 - `replicate_schema` (Boolean) Replicate schema across replicas (default true). Changing this forces replacement.
-- `role` (String) Cluster role — REQUIRED by ACM at launch (omitting it returns HTTP 500). Use the API codes "prod" or "dev" (shown as Production / Development in the ACM UI; the UI labels themselves are rejected). Defaults to "prod". Changing it forces replacement.
+- `role` (String) Cluster role — REQUIRED by ACM at launch (omitting it returns HTTP 500). Use the API codes "prod" or "dev" (shown as Production / Development in the ACM UI; the UI labels themselves are rejected). Defaults to "prod". Updated in place via the cluster edit API.
 - `secure` (Boolean) Enable TLS (default `true`). Changing this forces replacement of the cluster.
 - `shards` (Number) Number of shards. Mutable in place via rescale — adding shards is a partition expansion; reducing shards is a data-loss operation that ACM may refuse server-side. Plan accordingly.
 - `size` (String) Storage size per node. Mutable in place via rescale.
-- `ssh_port` (Number) SSH port for ACM operator access (ACM-UI default 2222). Changing this on an existing cluster forces replacement.
 - `storage_class` (String) Storage class. Mutable in place via rescale.
 - `throughput` (Number) Provisioned throughput. Mutable in place via rescale.
 - `timeouts` (Attributes) Operation timeouts as Go duration strings (e.g. "30m"). Defaults: create 30m, update 20m, delete 20m. (see [below for nested schema](#nestedatt--timeouts))
-- `timezone` (String) Cluster timezone. Changing this forces replacement.
+- `timezone` (String) Cluster timezone. Updated in place via the cluster edit API.
 - `type` (String) The cluster type. Changing this forces replacement.
-- `uptime` (String) Uptime schedule selector. Changing this forces replacement of the cluster.
-- `uptime_settings` (String, Sensitive) Uptime window settings (`uptimeSettings`), supplied as a raw JSON string. Sensitive because it may carry secrets. Changing this forces replacement of the cluster.
+- `uptime` (String) Uptime schedule selector (Always On / Stop when inactive / On schedule — NOT the elapsed-runtime counter). Updated in place via the cluster edit API.
+- `uptime_settings` (String, Sensitive) Uptime window settings (`uptimeSettings`), supplied as a raw JSON string. Sensitive because it may carry secrets. Updated in place via the cluster edit API. Removing the attribute leaves the last-applied settings active at ACM (not read back; send `"{}"` to clear explicitly).
 - `version` (String) ClickHouse version. Mutable in place via upgrade — forward-only; a downgrade is rejected at plan time (ClickHouse does not support in-place downgrades).
 - `version_image` (String) Explicit version image. Mutable in place via upgrade.
-- `volume_type` (String) Volume type. Changing this forces replacement of the cluster.
 - `zone_awareness` (Boolean) Spread nodes across availability zones. Changing this forces replacement.
 - `zookeeper` (String) ZooKeeper mode/selection (e.g. "launch"). Mutually exclusive with keeper_name. Changing this forces replacement.
 

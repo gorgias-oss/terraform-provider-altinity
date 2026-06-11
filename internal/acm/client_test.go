@@ -227,6 +227,37 @@ func TestFindClusterInEnv(t *testing.T) {
 	assert.False(t, found, "absent id must be reported missing, not error")
 }
 
+// TestEditCluster_PathAndBody locks the ClusterEdit wire contract: POST
+// /cluster/{id} with only the explicitly-set fields in the body — an
+// unset (nil) field must be omitted so ACM doesn't clobber it, while an
+// explicit empty string must be sent so the operator can clear the list.
+func TestEditCluster_PathAndBody(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":42,"name":"c1"}}`))
+	})
+
+	wl := "10.0.0.0/8,192.168.1.0/24"
+	require.NoError(t, client.EditCluster(context.Background(), 42, EditRequest{IPWhitelist: &wl}))
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Equal(t, "/cluster/42", gotPath)
+	assert.JSONEq(t, `{"ipWhitelist":"10.0.0.0/8,192.168.1.0/24"}`, gotBody)
+
+	// Explicit clear: pointer-to-empty must serialize the field.
+	empty := ""
+	require.NoError(t, client.EditCluster(context.Background(), 42, EditRequest{IPWhitelist: &empty}))
+	assert.JSONEq(t, `{"ipWhitelist":""}`, gotBody)
+
+	// Nil field: omitted entirely.
+	require.NoError(t, client.EditCluster(context.Background(), 42, EditRequest{}))
+	assert.JSONEq(t, `{}`, gotBody)
+}
+
 // TestRetry_5xxNotRetriedForPost: a 5xx on a non-idempotent create (POST) must
 // surface immediately, not retry — a retried launch hits ACM's per-env lock and
 // busy-loops (observed with ClusterLaunch returning 500 then "operation in

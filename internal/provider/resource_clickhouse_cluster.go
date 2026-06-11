@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm"
@@ -38,6 +39,7 @@ var (
 	_ resource.ResourceWithConfigure      = (*clusterResource)(nil)
 	_ resource.ResourceWithImportState    = (*clusterResource)(nil)
 	_ resource.ResourceWithValidateConfig = (*clusterResource)(nil)
+	_ resource.ResourceWithUpgradeState   = (*clusterResource)(nil)
 )
 
 // Default operation timeouts (design §7.3). The timeouts block lets the user
@@ -147,7 +149,6 @@ type clusterResourceModel struct {
 	// Storage.
 	Size         types.String `tfsdk:"size"`
 	StorageClass types.String `tfsdk:"storage_class"`
-	VolumeType   types.String `tfsdk:"volume_type"`
 	IOPS         types.Int64  `tfsdk:"iops"`
 	Throughput   types.Int64  `tfsdk:"throughput"`
 	Disks        types.Int64  `tfsdk:"disks"`
@@ -168,13 +169,12 @@ type clusterResourceModel struct {
 	// type cannot handle unknown values."
 	Azlist types.List `tfsdk:"azlist"`
 
-	// Networking.
+	// Networking. The ACM-internal launch plumbing (bind host + native/HTTP/SSH
+	// service ports) is deliberately NOT modeled: the ACM UI always sends the
+	// fixed defaults and never exposes them to the operator, so the provider
+	// pins them in launchRequestFromPlan instead of carrying attributes.
 	Secure         types.Bool   `tfsdk:"secure"`
 	PublicEndpoint types.Bool   `tfsdk:"public_endpoint"`
-	Host           types.String `tfsdk:"host"`
-	Port           types.Int64  `tfsdk:"port"`
-	HTTPPort       types.Int64  `tfsdk:"http_port"`
-	SSHPort        types.Int64  `tfsdk:"ssh_port"`
 	LBType         types.String `tfsdk:"lb_type"`
 	IPWhitelist    types.String `tfsdk:"ip_whitelist"`
 
@@ -221,6 +221,9 @@ func (r *clusterResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		// Version 1 (0.3.0): dropped volume_type/host/port/http_port/ssh_port
+		// after the API-surface audit. UpgradeState strips them from v0 state.
+		Version: 1,
 		Description: "Manage an Altinity.Cloud ClickHouse cluster (launch, rescale, upgrade, backup, and terminate). " +
 			"This resource does not manage ClickHouse settings, profiles, or users — use the " +
 			"`altinity_clickhouse_cluster_setting`, `altinity_clickhouse_profile`, and `altinity_clickhouse_user` resources for those.",
@@ -242,11 +245,10 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				},
 			},
 			"name": schema.StringAttribute{
-				Required:    true,
-				Description: "The cluster name. Changing this forces replacement.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				Required: true,
+				Description: "The cluster name. Renamed in place via the cluster edit API. " +
+					"NOTE: ACM derives the cluster's endpoint hostnames from the name, so a " +
+					"rename changes `endpoint`/`endpoint_http` — update any consumers accordingly.",
 			},
 			"type": schema.StringAttribute{
 				Optional:    true,
@@ -263,10 +265,9 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Default:  stringdefault.StaticString("prod"),
 				Description: "Cluster role — REQUIRED by ACM at launch (omitting it returns HTTP 500). " +
 					"Use the API codes \"prod\" or \"dev\" (shown as Production / Development in the ACM UI; " +
-					"the UI labels themselves are rejected). Defaults to \"prod\". Changing it forces replacement.",
+					"the UI labels themselves are rejected). Defaults to \"prod\". Updated in place via the cluster edit API.",
 				Validators: []validator.String{clusterRoleValidator{}},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
@@ -333,18 +334,9 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"volume_type": schema.StringAttribute{
-				// Optional-only (NOT Computed): the ACM API does not read this
-				// field back, so making it Computed nulls it in state and then
-				// re-plans it as unknown, which — combined with RequiresReplace —
-				// forces a spurious cluster replacement on any later change. Leaving
-				// it unset keeps a stable null; setting it still forces replace.
-				Optional:    true,
-				Description: "Volume type. Changing this forces replacement of the cluster.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
-			},
+			// volume_type was removed in 0.3.0: it appears in NO ACM request body
+			// (launch/edit/rescale/upgrade) and is not read back — it was a dead
+			// attribute that could only force spurious replacements.
 			"iops": schema.Int64Attribute{
 				Optional:    true,
 				Computed:    true,
@@ -371,7 +363,11 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				},
 			},
 			"data_path": schema.StringAttribute{
-				// Optional-only (NOT Computed): not read back by ACM — see volume_type.
+				// Optional-only (NOT Computed): the ACM API does not read this
+				// field back, so making it Computed nulls it in state and then
+				// re-plans it as unknown, which — combined with RequiresReplace —
+				// forces a spurious cluster replacement on any later change.
+				// Leaving it unset keeps a stable null.
 				Optional:    true,
 				Description: "Data path (storage policy). Changing this forces replacement.",
 				PlanModifiers: []planmodifier.String{
@@ -400,7 +396,7 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 
 			// ---- ZK / Keeper / AZ (topology — RequiresReplace) ----
 			"zookeeper": schema.StringAttribute{
-				// Optional-only (NOT Computed): not read back by ACM — see volume_type.
+				// Optional-only (NOT Computed): not read back by ACM — see data_path.
 				Optional:    true,
 				Description: "ZooKeeper mode/selection (e.g. \"launch\"). Mutually exclusive with keeper_name. Changing this forces replacement.",
 				PlanModifiers: []planmodifier.String{
@@ -417,8 +413,14 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				},
 			},
 			"zone_awareness": schema.BoolAttribute{
-				Optional:    true,
-				Computed:    true,
+				Optional: true,
+				Computed: true,
+				// The ClusterEdit body does accept zone awareness, but with an
+				// ambiguous dual encoding (`zoneAwareness` int enum [0,1] AND
+				// `disableZoneAwareness` string) and the same int-vs-bool spec
+				// unreliability seen on launch (see acm.LaunchRequest). Topology
+				// changes are also rescheduling-heavy, so this stays
+				// RequiresReplace until a live spike confirms the in-place path.
 				Description: "Spread nodes across availability zones. Changing this forces replacement.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.RequiresReplace(),
@@ -460,75 +462,33 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"host": schema.StringAttribute{
-				Optional: true,
-				Computed: true,
-				Default:  stringdefault.StaticString("localhost"),
-				Description: "Cluster host (ACM-UI default \"localhost\"). ACM uses this as the internal bind host; " +
-					"operators typically leave it at the default. Changing this on an existing cluster forces replacement.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-					stringplanmodifier.UseStateForUnknown(),
-				},
-			},
-			"port": schema.Int64Attribute{
-				Optional: true,
-				Computed: true,
-				Default:  int64default.StaticInt64(9900),
-				Description: "Native protocol port (ACM-UI default 9900 — NOT the upstream ClickHouse default of 9000). " +
-					"Override only if you have a specific reason to deviate from ACM's launch defaults; " +
-					"this is wired through to ACM at launch and is not echoed back, so the configured value is authoritative. " +
-					"Changing this on an existing cluster forces replacement.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
-					int64planmodifier.UseStateForUnknown(),
-				},
-			},
-			"http_port": schema.Int64Attribute{
-				Optional: true,
-				Computed: true,
-				Default:  int64default.StaticInt64(5123),
-				Description: "HTTP protocol port (ACM-UI default 5123 — NOT the upstream ClickHouse default of 8123). " +
-					"Override only if you have a specific reason to deviate from ACM's launch defaults. " +
-					"Changing this on an existing cluster forces replacement.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
-					int64planmodifier.UseStateForUnknown(),
-				},
-			},
-			"ssh_port": schema.Int64Attribute{
-				Optional: true,
-				Computed: true,
-				Default:  int64default.StaticInt64(2222),
-				Description: "SSH port for ACM operator access (ACM-UI default 2222). " +
-					"Changing this on an existing cluster forces replacement.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
-					int64planmodifier.UseStateForUnknown(),
-				},
-			},
+			// host/port/http_port/ssh_port were removed in 0.3.0: ACM-internal
+			// launch plumbing the ACM UI always sends as fixed defaults and never
+			// exposes to the operator. launchRequestFromPlan pins them instead.
 			"lb_type": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
 				Default:     stringdefault.StaticString("ingress"),
-				Description: "Load balancer type (default `\"ingress\"`). Changing this forces replacement of the cluster.",
+				Description: "Load balancer type (default `\"ingress\"`). Updated in place via the cluster edit API.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"ip_whitelist": schema.StringAttribute{
-				// Optional-only (NOT Computed): not read back by ACM — see volume_type.
-				Optional:    true,
-				Description: "IP allow-list (comma-separated CIDRs). Changing this forces replacement of the cluster.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				// Optional-only (NOT Computed): not read back by ACM — see data_path.
+				Optional: true,
+				Description: "IP allow-list (comma-separated CIDRs). Updated in place via the cluster edit API; " +
+					"removing the attribute clears the allow-list (the endpoint becomes unrestricted — see `public_endpoint`).",
 			},
 			"mysql_protocol": schema.BoolAttribute{
-				Optional:    true,
-				Computed:    true,
-				Default:     booldefault.StaticBool(false),
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				// The ClusterEdit body declares mysqlProtocol as int enum [0,1],
+				// but the spec made the same claim for launch where the backend
+				// live-rejects ints and wants JSON booleans (see acm.LaunchRequest).
+				// Until a live spike settles the edit-side wire type this stays
+				// RequiresReplace rather than risking a silently-ignored edit.
 				Description: "Enable the MySQL protocol (default false). Changing this forces replacement.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.RequiresReplace(),
@@ -540,9 +500,8 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Computed: true,
 				Default:  int64default.StaticInt64(9004),
 				Description: "MySQL protocol port (ACM-UI default 9004 — matches upstream ClickHouse). " +
-					"Only relevant when `mysql_protocol = true`. Changing this on an existing cluster forces replacement.",
+					"Only relevant when `mysql_protocol = true`. Updated in place via the cluster edit API.",
 				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
@@ -559,18 +518,17 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"timezone": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
-				Description: "Cluster timezone. Changing this forces replacement.",
+				Description: "Cluster timezone. Updated in place via the cluster edit API.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"uptime": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Uptime schedule selector. Changing this forces replacement of the cluster.",
+				Optional: true,
+				Computed: true,
+				Description: "Uptime schedule selector (Always On / Stop when inactive / On schedule — " +
+					"NOT the elapsed-runtime counter). Updated in place via the cluster edit API.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
@@ -636,12 +594,10 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional: true,
 				Description: "Datadog integration settings (`datadogSettings`), supplied as a raw JSON string. " +
 					"Sensitive because it contains the Datadog API key when set. " +
-					"Changing this forces replacement of the cluster.",
+					"Updated in place via the cluster edit API. Removing the attribute leaves the " +
+					"last-applied settings active at ACM (not read back; send `\"{}\"` to clear explicitly).",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"backup_options": schema.StringAttribute{
 				Optional: true,
@@ -654,23 +610,19 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional: true,
 				Description: "Uptime window settings (`uptimeSettings`), supplied as a raw JSON string. " +
 					"Sensitive because it may carry secrets. " +
-					"Changing this forces replacement of the cluster.",
+					"Updated in place via the cluster edit API. Removing the attribute leaves the " +
+					"last-applied settings active at ACM (not read back; send `\"{}\"` to clear explicitly).",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"alternate_endpoints": schema.StringAttribute{
 				Optional: true,
 				Description: "Alternate endpoints (`alternateEndpoints`), supplied as a raw JSON string. " +
 					"Sensitive because it may carry credentials. " +
-					"Changing this forces replacement of the cluster.",
+					"Updated in place via the cluster edit API. Removing the attribute leaves the " +
+					"last-applied settings active at ACM (not read back; send `\"[]\"` to clear explicitly).",
 				Sensitive:  true,
 				Validators: []validator.String{jsonStringValidator{}},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 
 			// ---- adoption opt-in (default false) ----
@@ -707,6 +659,60 @@ func (r *clusterResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 						Description: "Delete timeout (Go duration string). Default 20m.",
 					},
 				},
+			},
+		},
+	}
+}
+
+// removedV0Attributes are attributes dropped in schema version 1 (the 0.3.0
+// API-surface audit): volume_type appeared in no ACM request body and was
+// never read back (dead); host/port/http_port/ssh_port are ACM-internal launch
+// plumbing now pinned in launchRequestFromPlan.
+var removedV0Attributes = []string{"volume_type", "host", "port", "http_port", "ssh_port"}
+
+// UpgradeState migrates v0 state — which may still carry the removed
+// attributes — to v1 by deleting the removed keys from the raw state JSON and
+// re-decoding against the current schema. Every surviving attribute passes
+// through unchanged; attributes absent from old state decode as null.
+func (r *clusterResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	return map[int64]resource.StateUpgrader{
+		0: {
+			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+				if req.RawState == nil || len(req.RawState.JSON) == 0 {
+					resp.Diagnostics.AddError(
+						"Missing raw state during schema upgrade",
+						"cannot upgrade altinity_clickhouse_cluster state from schema v0: raw state is empty",
+					)
+					return
+				}
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal(req.RawState.JSON, &raw); err != nil {
+					resp.Diagnostics.AddError("Invalid raw state during schema upgrade", err.Error())
+					return
+				}
+				for _, k := range removedV0Attributes {
+					delete(raw, k)
+				}
+				cleaned, err := json.Marshal(raw)
+				if err != nil {
+					resp.Diagnostics.AddError("Failed to re-encode state during schema upgrade", err.Error())
+					return
+				}
+
+				var schemaResp resource.SchemaResponse
+				r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+				typ := schemaResp.Schema.Type().TerraformType(ctx)
+				val, err := tfprotov6.RawState{JSON: cleaned}.Unmarshal(typ)
+				if err != nil {
+					resp.Diagnostics.AddError("Failed to decode upgraded state against the v1 schema", err.Error())
+					return
+				}
+				dv, err := tfprotov6.NewDynamicValue(typ, val)
+				if err != nil {
+					resp.Diagnostics.AddError("Failed to build upgraded state value", err.Error())
+					return
+				}
+				resp.DynamicValue = &dv
 			},
 		},
 	}
@@ -1043,7 +1049,8 @@ func (r *clusterResource) Read(ctx context.Context, req resource.ReadRequest, re
 // ---- Update (dispatcher, design §7.2) ----
 
 // Update routes the plan/prior-state diff to the correct ACM endpoints in a
-// fixed sequential order: upgrade (1) -> rescale (2) -> backup (3). Each
+// fixed sequential order: upgrade (1) -> rescale (2) -> backup (3) ->
+// general edit (4) -> admin password (5). Each
 // poll-required step waits for terminal-healthy before the next. After every
 // successful sub-mutation we re-Read and write the converged-so-far state, so a
 // later failure still leaves state reflecting every step that succeeded
@@ -1075,12 +1082,15 @@ func (r *clusterResource) Update(ctx context.Context, req resource.UpdateRequest
 	upgradeReq, doUpgrade := upgradeDiff(plan, state)
 	rescaleReq, doRescale := rescaleDiff(plan, state)
 	backupReq, doBackup := backupDiff(plan, state)
+	editReq, doEdit := editDiff(plan, state)
 
 	// reReadAndStore re-Reads the cluster and writes converged-so-far state. It
 	// refreshes only the COMPUTED read-back attrs (status/state/endpoints/
 	// system_version/id), keeping the user's desired plan config intact for the
 	// still-pending steps. Secrets and config-only opaque blocks are likewise
-	// preserved from the plan (§7.1/§9).
+	// preserved from the plan (§7.1/§9). name is intentionally NOT refreshed:
+	// after a rename edit the plan carries the new name, and the post-rename
+	// endpoints ARE picked up here via refreshReadback.
 	reReadAndStore := func() error {
 		cluster, err := r.client.GetCluster(ctx, id)
 		if err != nil {
@@ -1180,7 +1190,32 @@ func (r *clusterResource) Update(ctx context.Context, req resource.UpdateRequest
 		}
 	}
 
-	// (4) admin password change — resolve the admin user id via list, then
+	// (4) general-info edit (ClusterEdit: name/role/lb_type/ip_whitelist/
+	// mysql_port/timezone/uptime/uptime_settings/alternate_endpoints/datadog).
+	// The POST itself is synchronous, but ACM may schedule an operator action
+	// (e.g. re-rendering load balancer rules, re-issuing endpoints after a
+	// rename), so poll idle+healthy like the other mutations before declaring
+	// the step converged.
+	if doEdit {
+		if err := r.client.EditCluster(ctx, id, editReq); err != nil {
+			resp.Diagnostics.AddError("Failed to edit cluster configuration", err.Error())
+			return
+		}
+		if err := pollIdle(); err != nil {
+			resp.Diagnostics.AddError("Cluster edit did not complete", err.Error())
+			return
+		}
+		if err := pollHealthy(); err != nil {
+			resp.Diagnostics.AddError("Cluster did not become healthy after edit", err.Error())
+			return
+		}
+		if err := reReadAndStore(); err != nil {
+			resp.Diagnostics.AddError("Failed to re-read cluster after edit", err.Error())
+			return
+		}
+	}
+
+	// (5) admin password change — resolve the admin user id via list, then
 	// update in place. No poll needed (the DB user update is synchronous).
 	//
 	// Guards: the plan must carry a known, non-null value. A null plan means
@@ -1370,6 +1405,17 @@ func (jsonStringValidator) ValidateString(_ context.Context, req validator.Strin
 	}
 }
 
+// ACM-internal launch plumbing pinned to the ACM-UI payload defaults instead
+// of being exposed as attributes: the launch wizard always sends exactly these
+// values (internal bind host + native/HTTP/SSH service ports) and offers no
+// way to change them, so they are not operator configuration.
+const (
+	launchHost     = "localhost"
+	launchPort     = 9900
+	launchHTTPPort = 5123
+	launchSSHPort  = 2222
+)
+
 func launchRequestFromPlan(p clusterResourceModel) acm.LaunchRequest {
 	req := acm.LaunchRequest{
 		Name:         p.Name.ValueString(),
@@ -1385,7 +1431,7 @@ func launchRequestFromPlan(p clusterResourceModel) acm.LaunchRequest {
 		Zookeeper:    p.Zookeeper.ValueString(),
 		KeeperName:   p.KeeperName.ValueString(),
 		LBType:       p.LBType.ValueString(),
-		Host:         p.Host.ValueString(),
+		Host:         launchHost,
 		AdminUser:    p.AdminUser.ValueString(),
 		AdminPass:    p.AdminPass.ValueString(),
 		IPWhitelist:  p.IPWhitelist.ValueString(),
@@ -1417,17 +1463,14 @@ func launchRequestFromPlan(p clusterResourceModel) acm.LaunchRequest {
 	if !p.Throughput.IsNull() && !p.Throughput.IsUnknown() {
 		req.Throughput = strconv.FormatInt(p.Throughput.ValueInt64(), 10)
 	}
-	if !p.Port.IsNull() && !p.Port.IsUnknown() {
-		req.Port = int(p.Port.ValueInt64())
-	}
-	if !p.HTTPPort.IsNull() && !p.HTTPPort.IsUnknown() {
-		req.HTTPPort = int(p.HTTPPort.ValueInt64())
-	}
+	// ACM-internal launch plumbing pinned to the ACM-UI payload values (the
+	// launch wizard always sends these and never exposes them to the operator;
+	// the corresponding attributes were removed in 0.3.0).
+	req.Port = launchPort
+	req.HTTPPort = launchHTTPPort
+	req.SSHPort = launchSSHPort
 	if !p.MysqlPort.IsNull() && !p.MysqlPort.IsUnknown() {
 		req.MysqlPort = int(p.MysqlPort.ValueInt64())
-	}
-	if !p.SSHPort.IsNull() && !p.SSHPort.IsUnknown() {
-		req.SSHPort = int(p.SSHPort.ValueInt64())
 	}
 	// Opaque passthroughs — TODO(spike): typed nested blocks.
 	req.DatadogSettings = rawJSONOrNil(p.Datadog)
@@ -1470,9 +1513,10 @@ func validateAdoptedCluster(plan clusterResourceModel, c acm.Cluster) error {
 	if !plan.Type.IsNull() && !plan.Type.IsUnknown() && c.Type != "" && plan.Type.ValueString() != c.Type {
 		mm = append(mm, fmt.Sprintf("type: plan=%q api=%q", plan.Type.ValueString(), c.Type))
 	}
-	if !plan.Role.IsNull() && !plan.Role.IsUnknown() && c.Role != "" && plan.Role.ValueString() != c.Role {
-		mm = append(mm, fmt.Sprintf("role: plan=%q api=%q", plan.Role.ValueString(), c.Role))
-	}
+	// role is intentionally NOT checked: it is mutable in place via ClusterEdit,
+	// so a mismatch on adoption converges on the next apply instead of blocking.
+	// ip_whitelist and the opaque blocks are likewise unchecked — ACM does not
+	// return them, so there is nothing to compare.
 	// shards/replicas: 0-shards is logically impossible in ACM, so a real zero
 	// from the API can be treated as "not yet populated" without losing real
 	// signal.
@@ -1613,6 +1657,75 @@ func backupDiff(plan, state clusterResourceModel) (acm.BackupRequest, bool) {
 	return acm.BackupRequest{Options: rawJSONOrNil(plan.BackupOptions)}, true
 }
 
+// editDiff returns the EditRequest and whether the general-info sub-domain
+// (ClusterEdit — design §7.2 rank 4) changed. Only changed fields are set on
+// the request (nil pointers / nil raw JSON are omitted from the wire body so
+// ACM leaves them untouched).
+//
+// Clear semantics differ by field shape:
+//   - ip_whitelist (Optional-only string, never read back): a null plan
+//     against a set state means the operator removed the attribute — send an
+//     explicit clear ("") rather than silently leaving the old allow-list
+//     active server-side (state would say "unset" while ACM still enforces it).
+//   - name/role/lb_type/timezone/uptime/mysql_port only ship known, non-null
+//     values (name is Required; the rest are Optional+Computed, so a removed
+//     config attribute keeps its prior state value rather than going null —
+//     and a defensive null guard ensures odd states never send a clear).
+//   - Opaque JSON blocks (uptime_settings/alternate_endpoints/datadog) cannot
+//     be cleared reliably (the empty-object semantics are unverified), so a
+//     null plan skips the field — the attribute descriptions document sending
+//     "{}" / "[]" as the explicit clear.
+func editDiff(plan, state clusterResourceModel) (acm.EditRequest, bool) {
+	var req acm.EditRequest
+	changed := false
+
+	// setStr sends only known, non-null new values. A null plan is NOT treated
+	// as a clear for these fields: name is Required (never null) and the others
+	// are Optional+Computed, where a removed config attribute keeps its prior
+	// state value — sending "" on a null would clear server-side config the
+	// operator only meant to stop managing.
+	setStr := func(p, s types.String, dst **string) {
+		if stringChanged(p, s) && !p.IsNull() {
+			v := p.ValueString()
+			*dst = &v
+			changed = true
+		}
+	}
+	setStr(plan.Name, state.Name, &req.Name)
+	setStr(plan.Role, state.Role, &req.Role)
+	setStr(plan.LBType, state.LBType, &req.LBType)
+	setStr(plan.Timezone, state.Timezone, &req.Timezone)
+	setStr(plan.Uptime, state.Uptime, &req.Uptime)
+
+	// ip_whitelist is the one field where a null plan IS an explicit clear:
+	// it is Optional-only (removal really does null the plan) and an absent
+	// allow-list is itself meaningful (unrestricted) — leaving the old list
+	// active server-side while state says "unset" would be worse.
+	if stringChanged(plan.IPWhitelist, state.IPWhitelist) {
+		v := plan.IPWhitelist.ValueString() // null → "" (explicit clear)
+		req.IPWhitelist = &v
+		changed = true
+	}
+
+	if int64Changed(plan.MysqlPort, state.MysqlPort) && !plan.MysqlPort.IsNull() {
+		v := int(plan.MysqlPort.ValueInt64())
+		req.MysqlPort = &v
+		changed = true
+	}
+
+	setRaw := func(p, s types.String, dst *json.RawMessage) {
+		if raw := rawJSONOrNil(p); raw != nil && stringChanged(p, s) {
+			*dst = raw
+			changed = true
+		}
+	}
+	setRaw(plan.UptimeSettings, state.UptimeSettings, &req.UptimeSettings)
+	setRaw(plan.AlternateEndpoints, state.AlternateEndpoints, &req.AlternateEndpoints)
+	setRaw(plan.Datadog, state.Datadog, &req.DatadogSettings)
+
+	return req, changed
+}
+
 // applyClusterToModel writes the API-returned cluster onto the model, coercing
 // int64/bool back to the framework types. Secret attributes (admin_password,
 // datadog) and the timeouts block are NOT touched — they are preserved from the
@@ -1717,8 +1830,8 @@ func (versionDowngradeGuard) PlanModifyString(_ context.Context, req planmodifie
 // echo in Cluster responses. resolveUnknownComputed nulls them out so Create
 // doesn't write unknown values to state.
 //
-// volume_type/data_path/zookeeper/ip_whitelist are Optional-only (NOT
-// Computed), so they are never unknown and intentionally excluded here.
+// data_path/zookeeper/ip_whitelist are Optional-only (NOT Computed), so they
+// are never unknown and intentionally excluded here.
 var computedStringFields = []func(*clusterResourceModel) *types.String{
 	// node_type/memory/size/storage_class: not present in the Cluster response
 	// top-level (they live in per-node NodeType objects). Map once a future
@@ -1746,10 +1859,6 @@ var computedInt64Fields = []func(*clusterResourceModel) *types.Int64{
 	func(m *clusterResourceModel) *types.Int64 { return &m.IOPS },
 	func(m *clusterResourceModel) *types.Int64 { return &m.Throughput },
 	func(m *clusterResourceModel) *types.Int64 { return &m.Disks },
-	// port/http_port: sent at launch (defaults 9900/5123) but not echoed back
-	// in the Cluster top-level response.
-	func(m *clusterResourceModel) *types.Int64 { return &m.Port },
-	func(m *clusterResourceModel) *types.Int64 { return &m.HTTPPort },
 }
 
 // resolveUnknownComputed nulls any Optional+Computed attribute that the ACM API

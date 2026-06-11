@@ -17,6 +17,20 @@ and the provider follows [Semantic Versioning](https://semver.org/).
   An explicitly public endpoint with no `ip_whitelist` now also raises a
   plan-time warning (set `ip_whitelist = "0.0.0.0/0"` to silence it when
   internet-wide exposure is intentional).
+- `altinity_clickhouse_cluster` drops five attributes after an audit of the
+  ACM API surface:
+  - `volume_type` — appeared in **no** ACM request body (launch / edit /
+    rescale / upgrade) and is never read back; it was a dead attribute whose
+    only effect was forcing spurious replacements.
+  - `host`, `port`, `http_port`, `ssh_port` — ACM-internal launch plumbing
+    (internal bind host + native/HTTP/SSH service ports). The ACM UI always
+    sends the fixed defaults (`localhost`/9900/5123/2222) and never exposes
+    them to the operator; the provider now pins those values in the launch
+    payload. **Before upgrading**, remove these attributes from configs (a
+    config that overrode them was deviating from ACM's supported surface).
+    Existing **state** is migrated automatically: the resource schema is now
+    version 1 with a state upgrader that drops the removed attributes from
+    v0 state files on the first plan/apply after upgrading.
 - `altinity_clickhouse_keeper` no longer silently adopts a pre-existing
   keeper of the same name: like the cluster resource, Create now fails
   loudly unless `adopt_existing = true` is set. This also applies to
@@ -50,6 +64,23 @@ and the provider follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `altinity_clickhouse_cluster` now updates these attributes **in place** via
+  the ACM cluster edit API (`POST /cluster/{id}`, operation `ClusterEdit`)
+  instead of forcing cluster replacement: `name` (NOTE: ACM derives endpoint
+  hostnames from the name, so a rename changes `endpoint`/`endpoint_http`),
+  `role`, `lb_type`, `ip_whitelist`, `mysql_port`, `timezone`, `uptime`,
+  `uptime_settings`, `alternate_endpoints`, and `datadog`.
+  - Removing `ip_whitelist` clears the allow-list explicitly at the API (the
+    endpoint becomes unrestricted — pair with `public_endpoint` deliberately).
+  - Removing one of the opaque JSON blocks (`uptime_settings`,
+    `alternate_endpoints`, `datadog`) leaves the last-applied settings active
+    at ACM (they are not read back); send `"{}"` / `"[]"` to clear explicitly.
+  - `mysql_protocol` and `zone_awareness` are also in the `ClusterEdit` body
+    but keep forcing replacement for now: the spec declares them int enum
+    [0,1] while the launch endpoint live-rejects ints in favor of JSON
+    booleans, so the edit-side wire encoding needs a live spike first.
+  - Adoption (`adopt_existing`) no longer blocks on a `role` mismatch — role
+    converges on the next apply now that it is mutable.
 - Provider registry namespace corrected to `gorgias-oss` across the dev
   mirror, dev overrides, and all examples/docs.
 - Removed the `make testacc` target and its README mention: no

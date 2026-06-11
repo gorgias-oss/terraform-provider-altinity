@@ -227,8 +227,10 @@ resource "altinity_clickhouse_cluster" "this" {
 ```
 
 Adoption still validates that immutable topology fields (environment, type,
-role, shards, replicas, keeper_name) match the plan. If any differ,
-adoption fails — destroy the existing cluster or align your config first.
+shards, replicas, keeper_name) match the plan. If any differ, adoption
+fails — destroy the existing cluster or align your config first. (`role` is
+not checked: it is mutable in place, so a mismatch converges on the next
+apply.)
 
 `altinity_clickhouse_keeper` follows the same rule: applying against an
 environment that already contains a keeper with the same name fails loudly
@@ -256,9 +258,11 @@ the ACM UI will not be corrected on the next apply:
   to ACM as raw JSON strings and the API doesn't echo them back in a
   drift-comparable shape. The configured value is authoritative; UI
   edits to these blocks will be overwritten.
-- **Cluster `host`/`port`/`http_port`/`ssh_port`/`mysql_port`** — sent at
-  launch but not returned on Read. The configured value is preserved in
-  state; manual UI changes are not detected.
+- **Cluster `ip_whitelist`** — sent to ACM but not returned on Read. The
+  configured value is preserved in state; manual UI changes are not
+  detected. (The internal bind host and native/HTTP/SSH service ports are
+  no longer attributes at all — the provider pins the fixed ACM-UI launch
+  values.)
 
 What **is** drift-detected and corrected on the next apply: cluster
 topology (`shards`, `replicas`, `node_type`, `size`, `version`, `storage_class`,
@@ -396,10 +400,19 @@ or the live API before implementation.
    passthroughs, not typed nested blocks.
 2. **Real terminal poll status strings.** `internal/acm/poll.go` uses
    placeholder healthy/error status constants for terminal-state detection.
-3. **In-place vs. RequiresReplace** decisions on a few cluster networking
-   and storage fields (`uptime`, `volume_type`, `data_path`, `ip_whitelist`,
-   `lb_type`) are conservatively `RequiresReplace` pending confirmation of
-   an in-place update path.
+3. **In-place vs. RequiresReplace.** Attributes present in the `ClusterEdit`
+   body (`POST /cluster/{id}`) update in place: `name`, `role`, `lb_type`,
+   `ip_whitelist`, `mysql_port`, `timezone`, `uptime` (the uptime **schedule
+   selector**, not the elapsed-runtime counter), `uptime_settings`,
+   `alternate_endpoints`, `datadog`. Two edit-capable fields stay
+   `RequiresReplace` pending a live spike on their wire encoding:
+   `mysql_protocol` and `zone_awareness` (the spec declares int enum [0,1],
+   but the launch endpoint live-rejects ints in favor of JSON booleans, and
+   zone awareness additionally has a dual `zoneAwareness` /
+   `disableZoneAwareness` encoding). Everything not in an update body
+   (`secure`, `public_endpoint`, `data_path`, `zookeeper`, `keeper_name`,
+   `type`, `replicate_schema`, `admin_user`) is launch-only and forces
+   replacement.
 
 ## License
 

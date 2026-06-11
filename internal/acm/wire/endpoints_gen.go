@@ -57,6 +57,12 @@ var Endpoints = map[string]Endpoint{
 		PathTemplate: "/cluster/{id}/upgrade",
 		PathParams:   []string{"id"},
 	},
+	"ClusterEdit": {
+		OperationID:  "ClusterEdit",
+		Method:       "POST",
+		PathTemplate: "/cluster/{id}",
+		PathParams:   []string{"id"},
+	},
 	"ClusterBackupCreate": {
 		OperationID:  "ClusterBackupCreate",
 		Method:       "POST",
@@ -272,6 +278,7 @@ const (
 	OpClusterStatus          = "ClusterStatus"
 	OpClusterRescale         = "ClusterRescale"
 	OpClusterUpgrade         = "ClusterUpgrade"
+	OpClusterEdit            = "ClusterEdit"
 	OpClusterBackupCreate    = "ClusterBackupCreate"
 	OpClusterRemove          = "ClusterRemove"
 	OpClusterSettingList     = "ClusterSettingList"
