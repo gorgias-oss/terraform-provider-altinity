@@ -40,13 +40,48 @@ and the provider follows [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `altinity_environment` resource — provisions an Altinity.Cloud environment
-  via the request flow and polls until ready. Create is **resumable**: a poll
-  timeout records no state and the next apply adopts the still-provisioning
-  environment by name. `terraform destroy` does **not** delete the environment
-  (deletion requires an out-of-band email + MFA confirmation); it warns and
-  drops the resource from state. Supports an optional `datadog` block
-  (`api_key` is write-only and Sensitive) and config-authoritative
-  `maintenance_windows` (null = unmanaged, `[]` = clear).
+  via the request flow (`POST /environments/request`) and polls until ready.
+  - Create **refuses to adopt** a pre-existing environment: if an environment
+    with the same `name` already exists (names are unique per organization),
+    the apply fails and directs you to `terraform import` it instead —
+    Terraform never silently takes over infrastructure it did not create. The
+    guard is enforced both at apply (Create) and at plan time (a `ModifyPlan`
+    check, so `terraform plan` surfaces the error instead of rendering a
+    misleading `+ create`). A create whose readiness poll exceeds the create
+    timeout records **no** state; because the environment was already
+    requested, re-applying hits the same guard — raise the create timeout, or
+    `terraform import` the environment by id once it finishes provisioning.
+  - Replacing an existing environment is **blocked at plan time**: changing
+    `name`, `cloud_provider`, or `region` forces replacement, but Terraform
+    cannot delete an Altinity.Cloud environment (destroy only drops it from
+    state — see below), so a destroy+create would strand the operator with
+    empty state and a still-live environment. The plan fails with
+    manual-migration guidance instead.
+  - `terraform import` (by numeric environment id) reconstructs full state from
+    the API: `cloud_provider` (from `kubeProvider`), `region` (from
+    `options.region`), the `datadog` block (non-secret fields), and
+    `maintenance_windows`. The datadog `api_key` is write-only — sent on apply,
+    never read back into state — so it imports as null and must be re-supplied
+    in config.
+  - `maintenance_windows` are read from the environment `acc-check` endpoint
+    (`EnvironmentCloudCheck`, `GET /environment/{id}/acc-check`; the plain
+    environment GET returns them as null) on both import and refresh, so
+    out-of-band changes — including deleting a window — are drift-detected when
+    the block is managed. Omit the block (null) to leave it unmanaged (never
+    probed); set `[]` to clear all windows. Modeled as a **set** (as is each
+    window's `days`), so neither window order nor day order produces a spurious
+    diff (ACM reorders both). Reads are best-effort: a failed/unreported
+    acc-check keeps the last-known windows rather than faking drift.
+  - The environment `name` must start with the caller's organization slug — ACM
+    rejects other names server-side with HTTP 400 (`Invalid Environment Name
+    prefix`; undocumented in the API spec, the error names the exact required
+    prefix). Documented on the attribute and example; there is no provider-side
+    validator (the provider cannot know the org slug).
+  - `terraform destroy` does **not** delete the environment (deletion requires
+    an out-of-band email + MFA confirmation that cannot be automated); it warns
+    and drops the resource from state.
+  - Supports an optional `datadog` block (`api_key` is write-only and
+    `Sensitive`).
 - `altinity_node_type` resource — manages environment node types
   (instance shapes) with adopt-by-(scope, code) create, in-place `code`
   edits, and a self-healing id lookup. Tolerations / nodeSelector /
