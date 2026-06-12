@@ -6,6 +6,7 @@ package acm
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strconv"
 
 	"github.com/gorgias-oss/terraform-provider-altinity/internal/acm/wire"
@@ -140,8 +141,12 @@ func (c *Client) GetEnvironmentByID(ctx context.Context, id int64) (Environment,
 		return Environment{}, err
 	}
 	// maintenanceWindowSchedules is decoded here (not in environmentFromWire)
-	// because it is not part of the wire.Environment struct. Absent/null → leave
-	// nil (unmanaged / not echoed by GET, see OQ-4).
+	// because it is not part of the wire.Environment struct. NOTE: EnvironmentShow
+	// (this GET) returns maintenanceWindowSchedules: null even for an env that has
+	// windows (live-confirmed 2026-06); the readable source is the acc-check
+	// endpoint — see GetEnvironmentMaintenanceWindows. This decode is kept
+	// defensively in case EnvironmentShow ever starts echoing them; in practice it
+	// yields nil here.
 	if len(r.MaintenanceWindowSchedules) > 0 && string(r.MaintenanceWindowSchedules) != "null" {
 		var mws []MaintenanceWindow
 		if uerr := json.Unmarshal(r.MaintenanceWindowSchedules, &mws); uerr == nil {
@@ -149,6 +154,58 @@ func (c *Client) GetEnvironmentByID(ctx context.Context, id int64) (Environment,
 		}
 	}
 	return env, nil
+}
+
+// acc-check USAGE POLICY — read before reaching for this endpoint elsewhere.
+//
+// GET /environment/{id}/acc-check (EnvironmentCloudCheck) is a CONNECTIVITY PROBE
+// ("checks the connection between Cloud Connector and Cloud Controller"), not a
+// config-read endpoint. It happens to return a rich effective-config snapshot
+// (node pools, storage classes, log/metric storage, CIDR, AZs, labels, and
+// maintenanceWindowSchedules), but treating it as a general read source is unsafe:
+// it can be slow / run a live probe, fail with 5xx when the connector is down,
+// and return stale/empty data for a freshly-provisioned or disconnected env.
+//
+// Therefore acc-check is used ONLY for maintenance_windows, and ONLY best-effort
+// (a failed read warns and keeps last-known / leaves null — never fails the op).
+// Do NOT route identity or required attributes through it: cloud_provider/region
+// already come from EnvironmentShow (authoritative, always available). It is a
+// candidate only as the backing source for NEW, optional, Computed env facts —
+// and those must keep the same best-effort, warn-don't-fail handling.
+
+// accCheckResponse is the subset of GET /environment/{id}/acc-check
+// (EnvironmentCloudCheck) the provider consumes. The pointer distinguishes the
+// three shapes acc-check can return for the field, which carry different meaning:
+//   - field absent / null  -> nil pointer: NOT reported (connector may not have
+//     synced) — callers must NOT treat this as "no windows".
+//   - []                   -> non-nil, empty: confirmed no windows.
+//   - [ ... ]              -> non-nil, populated: the live windows.
+type accCheckResponse struct {
+	MaintenanceWindowSchedules *[]MaintenanceWindow `json:"maintenanceWindowSchedules"`
+}
+
+// GetEnvironmentMaintenanceWindows reads the environment's maintenance windows
+// from the acc-check endpoint (GET /environment/{id}/acc-check). This is the only
+// readable source: EnvironmentShow returns maintenanceWindowSchedules: null even
+// when windows exist. noWait=true asks for the cached connection-check result
+// rather than re-probing the connector (the windows are part of the env config,
+// so the cached snapshot is sufficient — an assumption inferred from the param
+// name; see the usage policy above).
+//
+// The returned `known` flag is false when acc-check did NOT report the field
+// (absent/null) — distinct from a confirmed-empty []. Callers use it to avoid
+// blanking managed state on an unreported probe (false drift).
+func (c *Client) GetEnvironmentMaintenanceWindows(ctx context.Context, id int64) (windows []MaintenanceWindow, known bool, err error) {
+	var r accCheckResponse
+	args := map[string]string{"id": strconv.FormatInt(id, 10)}
+	q := url.Values{"noWait": {"true"}}
+	if err := c.doRequest(ctx, wire.OpEnvironmentCloudCheck, args, q, nil, &r); err != nil {
+		return nil, false, err
+	}
+	if r.MaintenanceWindowSchedules == nil {
+		return nil, false, nil // field absent/null: not reported
+	}
+	return *r.MaintenanceWindowSchedules, true, nil
 }
 
 // EditEnvironment updates an environment by id (POST /environment/{id}). The

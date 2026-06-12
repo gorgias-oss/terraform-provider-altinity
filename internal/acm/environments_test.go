@@ -105,6 +105,10 @@ func TestGetEnvironmentByID_DecodesFixture(t *testing.T) {
 	assert.Equal(t, "example-env", e.Name)
 	assert.Equal(t, "kubernetes", e.Type)
 	assert.Equal(t, "online", e.Status)
+	// cloud_provider/region are reconstructed from kubeProvider + options.region
+	// so an imported environment plans cleanly against its config.
+	assert.Equal(t, "gcp", e.CloudProvider)
+	assert.Equal(t, "us-east1", e.Region)
 }
 
 func TestEditEnvironment(t *testing.T) {
@@ -171,6 +175,51 @@ func TestGetEnvironmentByID_NoMaintenanceWindows(t *testing.T) {
 	assert.Nil(t, env.MaintenanceWindows)
 	require.NotNil(t, env.Datadog)
 	assert.False(t, env.Datadog.Enabled)
+}
+
+func TestGetEnvironmentMaintenanceWindows(t *testing.T) {
+	var gotPath, gotQuery string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		// acc-check returns the full effective env config; we consume only windows.
+		_, _ = w.Write([]byte(`{"data":{"cloudProvider":"GCP","maintenanceWindowSchedules":[` +
+			`{"name":"Schedule_1","enabled":true,"hour":16,"lengthInHours":4,"days":["FRIDAY","SATURDAY","SUNDAY"]}]}}`))
+	})
+
+	mws, known, err := client.GetEnvironmentMaintenanceWindows(context.Background(), 2293)
+	require.NoError(t, err)
+	assert.True(t, known, "a populated array is a known result")
+	assert.Equal(t, "/environment/2293/acc-check", gotPath)
+	assert.Contains(t, gotQuery, "noWait=true", "must request the non-blocking variant")
+	require.Len(t, mws, 1)
+	assert.Equal(t, "Schedule_1", mws[0].Name)
+	assert.Equal(t, 4, mws[0].LengthInHours)
+	assert.ElementsMatch(t, []string{"FRIDAY", "SATURDAY", "SUNDAY"}, mws[0].Days)
+}
+
+// TestGetEnvironmentMaintenanceWindows_EmptyVsNull distinguishes a confirmed-empty
+// [] (known=true) from an unreported null field (known=false) — the latter must
+// not be treated as "no windows" by callers.
+func TestGetEnvironmentMaintenanceWindows_EmptyVsNull(t *testing.T) {
+	emptyClient, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"maintenanceWindowSchedules":[]}}`))
+	})
+	mws, known, err := emptyClient.GetEnvironmentMaintenanceWindows(context.Background(), 2293)
+	require.NoError(t, err)
+	assert.True(t, known, "[] is a confirmed-empty result")
+	assert.Empty(t, mws)
+
+	nullClient, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"cloudProvider":"GCP","maintenanceWindowSchedules":null}}`))
+	})
+	mws, known, err = nullClient.GetEnvironmentMaintenanceWindows(context.Background(), 2293)
+	require.NoError(t, err)
+	assert.False(t, known, "a null/absent field is NOT reported")
+	assert.Empty(t, mws)
 }
 
 func TestEditEnvironment_DatadogAndMaintenance(t *testing.T) {

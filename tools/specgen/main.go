@@ -119,6 +119,10 @@ var allowedOps = []string{
 	"EnvironmentRequest", // POST   /environments/request
 	"EnvironmentShow",    // GET    /environment/{id}
 	"EnvironmentEdit",    // POST   /environment/{id}
+	// acc-check returns the environment's effective cloud config — and, unlike
+	// EnvironmentShow, the maintenanceWindowSchedules (which the plain GET omits),
+	// so it is the read source for importing maintenance windows.
+	"EnvironmentCloudCheck", // GET    /environment/{id}/acc-check
 	// Global cloud options (altinity_regions data source). The non-env-scoped
 	// variant of CloudOptions: region discovery happens before any environment
 	// exists, so it cannot use the {environment}-scoped endpoint.

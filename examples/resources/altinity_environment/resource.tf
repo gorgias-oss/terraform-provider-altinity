@@ -2,9 +2,11 @@
 # clusters are launched into. Created via the Altinity-hosted request flow and
 # polled until ready (status "online").
 #
-# Resumable create: if provisioning exceeds the create timeout, the apply fails
-# without recording state and a subsequent apply adopts the still-provisioning
-# environment by name and resumes waiting — it is never destroyed and re-created.
+# Create refuses to adopt a pre-existing environment: if one with the same name
+# already exists, the apply fails and tells you to `terraform import` it instead.
+# If provisioning exceeds the create timeout the apply also fails without
+# recording state; the environment is left running in ACM and must be imported
+# by id once it finishes provisioning (a plain re-apply hits the same guard).
 #
 # Destroy does NOT delete the environment in Altinity.Cloud — deletion requires
 # an email + MFA confirmation that cannot be automated. `terraform destroy`
@@ -21,10 +23,13 @@ variable "datadog_api_key" {
 }
 
 resource "altinity_environment" "example" {
-  name           = "gorgias-tf-demo-env"
+  # REQUIRED: the name must start with your Altinity.Cloud organization slug —
+  # ACM rejects names without it (HTTP 400 "Invalid Environment Name prefix").
+  # Replace "myorg" with your org slug.
+  name           = "myorg-example-env"
   cloud_provider = "gcp"
   region         = "us-east1" # or e.g. data.altinity_regions.gcp.regions[0].code
-  display_name   = "Terraform Demo"
+  display_name   = "Example Environment"
 
   # Datadog integration. `api_key` is write-only (sent, never read back, excluded
   # from drift detection). Omit the whole block to leave Datadog unmanaged.
@@ -40,6 +45,12 @@ resource "altinity_environment" "example" {
 
   # Maintenance windows. ACM requires >= 48h over any 32-day window. Omit (null)
   # to leave unmanaged; set `[]` to clear all. Days are uppercase weekdays.
+  #
+  # NOTE: the plain environment GET returns `maintenanceWindowSchedules: null`, so
+  # windows are read from the environment's acc-check endpoint instead — both on
+  # import and on refresh, so out-of-band changes (including deletion) are drift-
+  # detected when you manage this block. windows and days are sets, so their order
+  # does not matter (ACM may reorder both).
   maintenance_windows = [{
     name         = "weekend"
     enabled      = true
