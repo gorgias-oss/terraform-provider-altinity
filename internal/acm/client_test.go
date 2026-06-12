@@ -327,6 +327,25 @@ func TestRedactBody_TopLevelSecrets(t *testing.T) {
 	assert.Contains(t, out, `"adminPass":"***"`)
 }
 
+// TestRedactBody_DatadogKeyRealFieldName pins the exact field the ACM
+// EnvironmentShow response carries the Datadog API key in: datadogSettings.key
+// (bare "key", NOT "apiKey"). The API returns it in cleartext. datadogSettings is
+// an exact-match sensitive key, so the whole block is masked wholesale — the key
+// value can never appear, regardless of which inner field name carries it.
+// Regression guard for a real leak.
+func TestRedactBody_DatadogKeyRealFieldName(t *testing.T) {
+	in := []byte(`{"data":{"id":"2293","name":"env",` +
+		`"datadogSettings":{"enabled":true,"key":"dd-live-secret-abcd123","region":"datadoghq.eu"},` +
+		`"datadogPassword":"dd-pass-xyz"}}`)
+	out := redactBody(in)
+	assert.NotContains(t, out, "dd-live-secret-abcd123", "datadogSettings.key must be masked")
+	assert.NotContains(t, out, "dd-pass-xyz", "datadogPassword must be masked")
+	// datadogSettings is masked as a whole object (exact-match sensitive key).
+	assert.Contains(t, out, `"datadogSettings":"***"`)
+	// Non-secret sibling fields are still visible for debugging.
+	assert.Contains(t, out, `"name":"env"`)
+}
+
 // TestRedactBody_DeepNestedAndArrays is the response-body case: ACM returns
 // arrays of objects (environments list, nodes array) carrying cloud-provider
 // secrets at depth. The deep-walk redactor must scrub them all.

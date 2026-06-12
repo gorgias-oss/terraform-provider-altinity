@@ -4,7 +4,7 @@ page_title: "altinity_environment Resource - Altinity.Cloud"
 subcategory: ""
 description: |-
   An Altinity.Cloud environment — the region-scoped unit that ClickHouse clusters are launched into. Created via the Altinity-hosted request flow (POST /environments/request) and polled until ready.
-  Create is RESUMABLE: if the readiness poll exceeds the create timeout, the apply fails WITHOUT recording state, and a subsequent apply adopts the still-provisioning environment by name and resumes waiting — it is never destroyed and re-requested. As a consequence, an unmanaged environment with the same name would be adopted.
+  Create REFUSES to adopt a pre-existing environment: if an environment with the same name already exists in Altinity.Cloud (names are unique per organization), the apply fails and directs you to terraform import it instead — Terraform never silently takes over infrastructure it did not create. If the readiness poll exceeds the create timeout the apply also fails without recording state; because the environment was already requested, re-applying hits the same guard — raise the create timeout, or import the environment by id once it finishes provisioning.
   Destroy does NOT delete the environment in Altinity.Cloud: environment deletion requires an out-of-band email + MFA confirmation that cannot be automated, so terraform destroy removes the resource from state and warns — delete the environment manually in the ACM UI.
 ---
 
@@ -12,7 +12,7 @@ description: |-
 
 An Altinity.Cloud environment — the region-scoped unit that ClickHouse clusters are launched into. Created via the Altinity-hosted request flow (POST /environments/request) and polled until ready.
 
-Create is RESUMABLE: if the readiness poll exceeds the create timeout, the apply fails WITHOUT recording state, and a subsequent apply adopts the still-provisioning environment by name and resumes waiting — it is never destroyed and re-requested. As a consequence, an unmanaged environment with the same `name` would be adopted.
+Create REFUSES to adopt a pre-existing environment: if an environment with the same `name` already exists in Altinity.Cloud (names are unique per organization), the apply fails and directs you to `terraform import` it instead — Terraform never silently takes over infrastructure it did not create. If the readiness poll exceeds the create timeout the apply also fails without recording state; because the environment was already requested, re-applying hits the same guard — raise the create timeout, or import the environment by id once it finishes provisioning.
 
 Destroy does NOT delete the environment in Altinity.Cloud: environment deletion requires an out-of-band email + MFA confirmation that cannot be automated, so `terraform destroy` removes the resource from state and warns — delete the environment manually in the ACM UI.
 
@@ -23,9 +23,11 @@ Destroy does NOT delete the environment in Altinity.Cloud: environment deletion 
 # clusters are launched into. Created via the Altinity-hosted request flow and
 # polled until ready (status "online").
 #
-# Resumable create: if provisioning exceeds the create timeout, the apply fails
-# without recording state and a subsequent apply adopts the still-provisioning
-# environment by name and resumes waiting — it is never destroyed and re-created.
+# Create refuses to adopt a pre-existing environment: if one with the same name
+# already exists, the apply fails and tells you to `terraform import` it instead.
+# If provisioning exceeds the create timeout the apply also fails without
+# recording state; the environment is left running in ACM and must be imported
+# by id once it finishes provisioning (a plain re-apply hits the same guard).
 #
 # Destroy does NOT delete the environment in Altinity.Cloud — deletion requires
 # an email + MFA confirmation that cannot be automated. `terraform destroy`
@@ -42,10 +44,13 @@ variable "datadog_api_key" {
 }
 
 resource "altinity_environment" "example" {
-  name           = "gorgias-tf-demo-env"
+  # REQUIRED: the name must start with your Altinity.Cloud organization slug —
+  # ACM rejects names without it (HTTP 400 "Invalid Environment Name prefix").
+  # Replace "myorg" with your org slug.
+  name           = "myorg-example-env"
   cloud_provider = "gcp"
   region         = "us-east1" # or e.g. data.altinity_regions.gcp.regions[0].code
-  display_name   = "Terraform Demo"
+  display_name   = "Example Environment"
 
   # Datadog integration. `api_key` is write-only (sent, never read back, excluded
   # from drift detection). Omit the whole block to leave Datadog unmanaged.
@@ -61,6 +66,12 @@ resource "altinity_environment" "example" {
 
   # Maintenance windows. ACM requires >= 48h over any 32-day window. Omit (null)
   # to leave unmanaged; set `[]` to clear all. Days are uppercase weekdays.
+  #
+  # NOTE: the plain environment GET returns `maintenanceWindowSchedules: null`, so
+  # windows are read from the environment's acc-check endpoint instead — both on
+  # import and on refresh, so out-of-band changes (including deletion) are drift-
+  # detected when you manage this block. windows and days are sets, so their order
+  # does not matter (ACM may reorder both).
   maintenance_windows = [{
     name         = "weekend"
     enabled      = true
@@ -88,14 +99,16 @@ output "altinity_env" {
 ### Required
 
 - `cloud_provider` (String) Cloud provider to provision into: aws, gcp, azure, or hcloud.
-- `name` (String) Environment name (unique within the organization). Used as the adopt-by-name key for resumable create.
+- `name` (String) Environment name (unique within the organization). Must start with your organization slug — ACM rejects other names server-side with HTTP 400 ("Invalid Environment Name prefix"); the error names the exact required prefix. Create also fails if an environment with this name already exists — `terraform import` the existing one instead.
 - `region` (String) Region code to provision into (see the altinity_regions data source). Routed to the provider-specific request field based on cloud_provider.
 
 ### Optional
 
 - `datadog` (Attributes) Datadog integration for the environment (ship ClickHouse metrics/logs to Datadog). Omit the block to leave Datadog unmanaged. (see [below for nested schema](#nestedatt--datadog))
 - `display_name` (String) Human-readable display name. The request endpoint cannot set it, so when specified the provider applies it via an edit immediately after the environment is ready. Defaults to the environment name.
-- `maintenance_windows` (Attributes List) Maintenance windows for the environment. ACM requires the windows to provide at least 48h over any 32-day window (rejected server-side otherwise). Omit (null) to leave unmanaged; set `[]` to clear all windows. Not reconciled against the API on read. (see [below for nested schema](#nestedatt--maintenance_windows))
+- `maintenance_windows` (Attributes Set) Maintenance windows for the environment. ACM requires the windows to provide at least 48h over any 32-day window (rejected server-side otherwise). Omit (null) to leave unmanaged; set `[]` to clear all windows.
+
+Read from the environment's acc-check endpoint (the plain environment GET returns them as null), so when you manage the block, out-of-band changes — including deleting a window — ARE refreshed and shown as drift. Leaving the block unset keeps it unmanaged (never probed or populated). Modeled as a set, so neither the order of the windows nor of each window's days matters for diffs (ACM may reorder both). (see [below for nested schema](#nestedatt--maintenance_windows))
 - `timeouts` (Attributes) Operation timeouts (Go duration strings). create defaults to 45m, delete to 30m. (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
@@ -112,7 +125,7 @@ output "altinity_env" {
 
 Optional:
 
-- `api_key` (String, Sensitive) Datadog API key. Write-only: sent on apply, never read back from the API, and excluded from drift detection (an out-of-band change is not noticed).
+- `api_key` (String, Sensitive) Datadog API key. Write-only: sent on apply but never read back into Terraform state (the API returns it, but the provider deliberately drops it to keep the secret out of state and masks it in debug logs), and excluded from drift detection (an out-of-band change is not noticed). On import it comes in as null and must be re-supplied in config.
 - `apply_to_clusters` (Boolean) Push the Datadog config to the environment's clusters (applyToClusters). Defaults to true.
 - `enabled` (Boolean) Whether the Datadog integration is enabled.
 - `region` (String) Datadog site, e.g. datadoghq.com (default) or datadoghq.eu.
@@ -126,7 +139,7 @@ Optional:
 
 Required:
 
-- `days` (List of String) Weekdays (uppercase): MONDAY…SUNDAY.
+- `days` (Set of String) Weekdays (uppercase): MONDAY…SUNDAY. Unordered (set).
 - `enabled` (Boolean)
 - `hour` (Number) Start hour, 0–23 (UTC).
 - `length_hours` (Number) Window length in hours.

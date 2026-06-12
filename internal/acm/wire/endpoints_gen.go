@@ -261,6 +261,12 @@ var Endpoints = map[string]Endpoint{
 		PathTemplate: "/environment/{id}",
 		PathParams:   []string{"id"},
 	},
+	"EnvironmentCloudCheck": {
+		OperationID:  "EnvironmentCloudCheck",
+		Method:       "GET",
+		PathTemplate: "/environment/{id}/acc-check",
+		PathParams:   []string{"id"},
+	},
 	"CloudOptionsGlobal": {
 		OperationID:  "CloudOptionsGlobal",
 		Method:       "GET",
@@ -312,5 +318,6 @@ const (
 	OpEnvironmentRequest     = "EnvironmentRequest"
 	OpEnvironmentShow        = "EnvironmentShow"
 	OpEnvironmentEdit        = "EnvironmentEdit"
+	OpEnvironmentCloudCheck  = "EnvironmentCloudCheck"
 	OpCloudOptionsGlobal     = "CloudOptionsGlobal"
 )

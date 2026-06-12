@@ -220,6 +220,14 @@ type Environment struct {
 	IDOwner        int64
 	IDParent       int64
 
+	// CloudProvider is the lowercase cloud code (aws/gcp/azure/hcloud), read from
+	// EnvironmentShow.kubeProvider. Empty when the GET does not echo it (e.g. the
+	// EnvironmentRequest/Edit responses, which omit it).
+	CloudProvider string
+	// Region is the environment's region code, read from EnvironmentShow.options.region.
+	// Empty when the GET does not echo it.
+	Region string
+
 	// Datadog is the environment's Datadog integration config, read from
 	// EnvironmentShow.datadogSettings. nil when unset. The API key is
 	// deliberately NOT carried here (write-only at the resource layer).
@@ -432,8 +440,28 @@ func environmentFromWire(w *wire.Environment) (Environment, error) {
 	e.Domain = w.Domain
 	e.Status = w.Status
 	e.State = w.State
+	// kubeProvider is the cloud code; ACM echoes it lowercase ("gcp"), matching
+	// the resource's lowercase cloud_provider. Normalize defensively.
+	e.CloudProvider = strings.ToLower(w.KubeProvider)
+	e.Region = regionFromOptions(w.Options)
 	e.Datadog = datadogConfigFromRaw(w.DatadogSettings)
 	return e, nil
+}
+
+// regionFromOptions extracts options.region from the EnvironmentShow `options`
+// blob (e.g. {"region":"us-east1","azlist":[...],"network":"..."}). Returns ""
+// when options is absent/null or carries no region.
+func regionFromOptions(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var o struct {
+		Region string `json:"region"`
+	}
+	if err := json.Unmarshal(raw, &o); err != nil {
+		return ""
+	}
+	return o.Region
 }
 
 // nodeTypeFromWire coerces a wire.NodeType into the domain NodeType.

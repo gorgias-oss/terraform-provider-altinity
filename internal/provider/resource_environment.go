@@ -29,13 +29,14 @@ var (
 	_ resource.Resource                = (*environmentResource)(nil)
 	_ resource.ResourceWithConfigure   = (*environmentResource)(nil)
 	_ resource.ResourceWithImportState = (*environmentResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*environmentResource)(nil)
 )
 
 // Environment lifecycle timeout defaults. Provisioning a cloud Kubernetes
 // environment (control plane + node groups + LB + DNS) realistically runs
-// 10-30+ min; the create default is generous because the resumable Create
-// (see below) recovers from an under-shoot on the next apply rather than
-// destroying the in-flight environment.
+// 10-30+ min; the create default is generous because under-shooting it fails
+// the apply mid-provisioning — the environment is left running in ACM and must
+// then be imported by id (Create refuses to re-adopt it on a plain re-apply).
 const (
 	envDefaultCreateTimeout = 45 * time.Minute
 	envDefaultUpdateTimeout = 10 * time.Minute
@@ -74,7 +75,7 @@ type environmentResourceModel struct {
 	Status             types.String  `tfsdk:"status"`
 	State              types.String  `tfsdk:"state"`
 	Datadog            *datadogModel `tfsdk:"datadog"`
-	MaintenanceWindows types.List    `tfsdk:"maintenance_windows"`
+	MaintenanceWindows types.Set     `tfsdk:"maintenance_windows"`
 	Timeouts           types.Object  `tfsdk:"timeouts"`
 }
 
@@ -97,7 +98,7 @@ type maintenanceWindowModel struct {
 	Enabled     types.Bool   `tfsdk:"enabled"`
 	Hour        types.Int64  `tfsdk:"hour"`
 	LengthHours types.Int64  `tfsdk:"length_hours"`
-	Days        types.List   `tfsdk:"days"`
+	Days        types.Set    `tfsdk:"days"`
 }
 
 // maintenanceWindowAttrTypes is the object type of a maintenance_windows element.
@@ -107,7 +108,7 @@ func maintenanceWindowAttrTypes() map[string]attr.Type {
 		"enabled":      types.BoolType,
 		"hour":         types.Int64Type,
 		"length_hours": types.Int64Type,
-		"days":         types.ListType{ElemType: types.StringType},
+		"days":         types.SetType{ElemType: types.StringType},
 	}
 }
 
@@ -120,10 +121,13 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 		Description: "An Altinity.Cloud environment — the region-scoped unit that ClickHouse " +
 			"clusters are launched into. Created via the Altinity-hosted request flow " +
 			"(POST /environments/request) and polled until ready.\n\n" +
-			"Create is RESUMABLE: if the readiness poll exceeds the create timeout, the apply " +
-			"fails WITHOUT recording state, and a subsequent apply adopts the still-provisioning " +
-			"environment by name and resumes waiting — it is never destroyed and re-requested. " +
-			"As a consequence, an unmanaged environment with the same `name` would be adopted.\n\n" +
+			"Create REFUSES to adopt a pre-existing environment: if an environment with the same " +
+			"`name` already exists in Altinity.Cloud (names are unique per organization), the apply " +
+			"fails and directs you to `terraform import` it instead — Terraform never silently takes " +
+			"over infrastructure it did not create. If the readiness poll exceeds the create timeout " +
+			"the apply also fails without recording state; because the environment was already " +
+			"requested, re-applying hits the same guard — raise the create timeout, or import the " +
+			"environment by id once it finishes provisioning.\n\n" +
 			"Destroy does NOT delete the environment in Altinity.Cloud: environment deletion requires " +
 			"an out-of-band email + MFA confirmation that cannot be automated, so `terraform destroy` " +
 			"removes the resource from state and warns — delete the environment manually in the ACM UI.",
@@ -137,7 +141,10 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "Environment name (unique within the organization). Used as the adopt-by-name key for resumable create.",
+				Description: "Environment name (unique within the organization). Must start with your " +
+					"organization slug — ACM rejects other names server-side with HTTP 400 (\"Invalid Environment " +
+					"Name prefix\"); the error names the exact required prefix. Create also fails if an environment " +
+					"with this name already exists — `terraform import` the existing one instead.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -216,8 +223,10 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 					"api_key": schema.StringAttribute{
 						Optional:  true,
 						Sensitive: true,
-						Description: "Datadog API key. Write-only: sent on apply, never read back from the API, " +
-							"and excluded from drift detection (an out-of-band change is not noticed).",
+						Description: "Datadog API key. Write-only: sent on apply but never read back into Terraform " +
+							"state (the API returns it, but the provider deliberately drops it to keep the secret out of " +
+							"state and masks it in debug logs), and excluded from drift detection (an out-of-band change " +
+							"is not noticed). On import it comes in as null and must be re-supplied in config.",
 					},
 					"region": schema.StringAttribute{
 						Optional: true, Computed: true,
@@ -243,22 +252,27 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 					},
 				},
 			},
-			"maintenance_windows": schema.ListNestedAttribute{
+			"maintenance_windows": schema.SetNestedAttribute{
 				Optional: true,
 				Description: "Maintenance windows for the environment. ACM requires the windows to provide " +
 					"at least 48h over any 32-day window (rejected server-side otherwise). Omit (null) to leave " +
-					"unmanaged; set `[]` to clear all windows. Not reconciled against the API on read.",
+					"unmanaged; set `[]` to clear all windows.\n\n" +
+					"Read from the environment's acc-check endpoint (the plain environment GET returns them as " +
+					"null), so when you manage the block, out-of-band changes — including deleting a window — ARE " +
+					"refreshed and shown as drift. Leaving the block unset keeps it unmanaged (never probed or " +
+					"populated). Modeled as a set, so neither the order of the windows nor of each window's days " +
+					"matters for diffs (ACM may reorder both).",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"name":         schema.StringAttribute{Required: true},
 						"enabled":      schema.BoolAttribute{Required: true},
 						"hour":         schema.Int64Attribute{Required: true, Description: "Start hour, 0–23 (UTC)."},
 						"length_hours": schema.Int64Attribute{Required: true, Description: "Window length in hours."},
-						"days": schema.ListAttribute{
+						"days": schema.SetAttribute{
 							ElementType: types.StringType,
 							Required:    true,
-							Description: "Weekdays (uppercase): MONDAY…SUNDAY.",
-							Validators:  []validator.List{weekdayListValidator{}},
+							Description: "Weekdays (uppercase): MONDAY…SUNDAY. Unordered (set).",
+							Validators:  []validator.Set{weekdaySetValidator{}},
 						},
 					},
 				},
@@ -291,6 +305,105 @@ func (r *environmentResource) Configure(_ context.Context, req resource.Configur
 	r.client = client
 }
 
+// ModifyPlan adds two plan-time guards. The client is nil during validation
+// walks before Configure runs, so bail early in that case.
+//
+//   - CREATE (null prior state): look the environment up by name and, if one
+//     already exists, fail the plan with an import hint — so `terraform plan`
+//     shows the error instead of a misleading "+ create". Best-effort: skipped
+//     when name is unknown, and a transient lookup failure degrades to a warning.
+//     The Create-time guard remains the authoritative defense.
+//   - REPLACE (non-null prior state, a RequiresReplace field changed): block it.
+//     Destroy cannot actually delete the environment in ACM (it only drops state
+//     and warns), so a destroy+create would strand the operator — the create half
+//     hits the "already exists" guard and the resource is gone from state with the
+//     environment still live. Fail at plan with manual-migration guidance.
+func (r *environmentResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Destroy (null plan) or pre-Configure validation walk: nothing to guard.
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+
+	var plan environmentResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Update/replace path: prior state exists. Block a replacement of the
+	// (still-live, undeletable) environment before the destroy half runs.
+	if !req.State.Raw.IsNull() {
+		var state environmentResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		for _, f := range []struct {
+			attr        string
+			plan, state types.String
+		}{
+			{"name", plan.Name, state.Name},
+			{"cloud_provider", plan.CloudProvider, state.CloudProvider},
+			{"region", plan.Region, state.Region},
+		} {
+			if f.plan.IsUnknown() || f.state.IsNull() {
+				continue
+			}
+			if f.plan.ValueString() != f.state.ValueString() {
+				resp.Diagnostics.AddAttributeError(
+					path.Root(f.attr),
+					"Environment cannot be replaced",
+					fmt.Sprintf("Changing %s forces replacement, but Terraform cannot delete an Altinity.Cloud "+
+						"environment (destroy only removes it from state). A destroy+create would leave the existing "+
+						"environment %q live in ACM while the create fails the \"already exists\" guard, stranding you "+
+						"with empty state.\n\nTo change %s: delete the environment manually in the ACM UI (Environments "+
+						"→ %s → Delete, approve the emailed confirmation), then apply to create the new one — or stand up "+
+						"the replacement as a separate resource first and migrate.",
+						f.attr, state.Name.ValueString(), f.attr, state.Name.ValueString()),
+				)
+			}
+		}
+		return
+	}
+
+	// Create path: refuse to plan a create over an environment that already exists.
+	// name may be unknown (interpolated); only the apply-time guard can catch that.
+	if plan.Name.IsUnknown() || plan.Name.IsNull() {
+		return
+	}
+	name := plan.Name.ValueString()
+
+	existing, err := r.client.GetEnvironmentByName(ctx, name)
+	if err != nil {
+		if acm.IsNotFound(err) {
+			return
+		}
+		// Inconclusive lookup: don't block the plan — the Create-time guard still
+		// applies — but tell the operator the check could not be completed.
+		resp.Diagnostics.AddWarning(
+			"Could not check whether the environment already exists",
+			fmt.Sprintf("Looking up environment %q during planning failed: %s.\n\n"+
+				"The plan continues; the create will still fail if the environment turns out to exist.", name, err.Error()),
+		)
+		return
+	}
+
+	resp.Diagnostics.AddAttributeError(
+		path.Root("name"),
+		"Environment already exists",
+		environmentExistsDetail(name, existing.ID),
+	)
+}
+
+// environmentExistsDetail is the shared "refuse to adopt, import instead"
+// diagnostic detail used by both the plan-time guard (ModifyPlan) and the
+// apply-time guard (Create), so the wording and import hint stay in sync.
+func environmentExistsDetail(name string, id int64) string {
+	return fmt.Sprintf("An environment named %q already exists in Altinity.Cloud (id %d). Terraform "+
+		"will not adopt an environment it did not create. Import it into state instead:\n\n"+
+		"  terraform import altinity_environment.<resource_name> %d", name, id, id)
+}
+
 // buildEnvRequest maps the model's cloud_provider + region onto the
 // EnvironmentRequest. Two ACM quirks are handled here (both live-confirmed
 // 2026-06-09 against the ACM UI's request-environment call):
@@ -321,15 +434,27 @@ func (r *environmentResource) buildEnvRequest(m environmentResourceModel) acm.En
 	return req
 }
 
-// applyEnvironmentToModel writes the API's computed fields onto the model. It
-// deliberately does NOT touch name/cloud_provider/region (RequiresReplace,
-// operator-owned, and not echoed back in a directly-mappable form) — those are
-// preserved from plan/state. The datadog block is reconciled in-place for its
-// non-secret fields; `api_key`/`apply_to_clusters` and `maintenance_windows`
-// are operator/write-owned and left as the caller's model already holds them.
+// applyEnvironmentToModel writes the API's computed fields onto the model.
+// name/cloud_provider/region are RequiresReplace and operator-owned; they are
+// reconciled from the API ONLY when it echoes a non-empty value (so importing an
+// environment populates them) and otherwise preserved from plan/state (so a GET
+// that omits them never forces a spurious replace). The datadog block is
+// reconciled in-place for its non-secret fields; `api_key`/`apply_to_clusters`
+// and `maintenance_windows` are operator/write-owned and left as the caller's
+// model already holds them.
 func applyEnvironmentToModel(m *environmentResourceModel, e acm.Environment) {
 	m.ID = types.StringValue(strconv.FormatInt(e.ID, 10))
-	m.Name = types.StringValue(e.Name)
+	// name/cloud_provider/region are operator-owned; only overwrite from the API
+	// when it actually echoes a value, else preserve the plan/state value.
+	if e.Name != "" {
+		m.Name = types.StringValue(e.Name)
+	}
+	if e.CloudProvider != "" {
+		m.CloudProvider = types.StringValue(e.CloudProvider)
+	}
+	if e.Region != "" {
+		m.Region = types.StringValue(e.Region)
+	}
 	m.DisplayName = types.StringValue(e.DisplayName)
 	m.NormalizedName = types.StringValue(e.NormalizedName)
 	m.Type = types.StringValue(e.Type)
@@ -385,29 +510,47 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 	opCtx, cancel := context.WithTimeout(ctx, to.create)
 	defer cancel()
 
-	// Adopt-by-name first, then request if absent — both inside one
-	// RetryWhileBusy so a transient env lock retries the whole sequence. This is
-	// what makes Create RESUMABLE: a prior apply that timed out mid-poll left a
-	// provisioning environment in ACM; this re-entry adopts it by name and skips
-	// the request entirely.
-	var envID int64
-	err := acm.RetryWhileBusy(opCtx, func() error {
-		existing, gerr := r.client.GetEnvironmentByName(opCtx, name)
+	// Refuse to create when an environment with this name already exists. ACM
+	// environment names are unique per organization, so a name match means an
+	// environment Terraform did not create — silently adopting it would put
+	// unmanaged (or another state's) infrastructure under this resource. The
+	// operator must `terraform import` it instead. The lookup runs inside
+	// RetryWhileBusy so a transient env lock retries rather than failing the apply.
+	var existing acm.Environment
+	found := false
+	if err := acm.RetryWhileBusy(opCtx, func() error {
+		found = false // reset per attempt so a retry never leaves a stale true
+		e, gerr := r.client.GetEnvironmentByName(opCtx, name)
 		if gerr == nil {
-			envID = existing.ID
+			existing, found = e, true
 			return nil
 		}
-		if !acm.IsNotFound(gerr) {
-			return gerr
+		if acm.IsNotFound(gerr) {
+			return nil
 		}
+		return gerr
+	}); err != nil {
+		resp.Diagnostics.AddError("Failed to check for an existing environment", err.Error())
+		return
+	}
+	if found {
+		resp.Diagnostics.AddError(
+			"Environment already exists",
+			environmentExistsDetail(name, existing.ID),
+		)
+		return
+	}
+
+	// Request the new environment.
+	var envID int64
+	if err := acm.RetryWhileBusy(opCtx, func() error {
 		created, cerr := r.client.RequestEnvironment(opCtx, envReq)
 		if cerr != nil {
 			return cerr
 		}
 		envID = created.ID
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		resp.Diagnostics.AddError("Failed to request environment", err.Error())
 		return
 	}
@@ -425,9 +568,10 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		envID = env.ID
 	}
 
-	// Poll until ready. On timeout we return WITHOUT setting state so the next
-	// apply adopts-by-name and resumes (the resumability contract — do NOT add a
-	// resp.State.Set on this path).
+	// Poll until ready. On timeout we return WITHOUT setting state. The request
+	// already created the environment in ACM, so a plain re-apply would now fail
+	// the "already exists" guard above; direct the operator to raise the create
+	// timeout or import the environment by id once it finishes provisioning.
 	if err := acm.PollUntilHealthy(opCtx, func(c context.Context) (string, error) {
 		e, gerr := r.client.GetEnvironmentByID(c, envID)
 		return e.Status, gerr
@@ -435,8 +579,9 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		resp.Diagnostics.AddError(
 			"Environment did not become ready",
 			fmt.Sprintf("Environment %q (id %d) is still provisioning: %s.\n\n"+
-				"Re-apply to resume waiting on the SAME environment (it is not destroyed), "+
-				"or raise the create timeout.", name, envID, err),
+				"It was created in Altinity.Cloud but did not become ready within the create timeout. "+
+				"Raise the create timeout, or once it finishes provisioning import it into state:\n\n"+
+				"  terraform import altinity_environment.<resource_name> %d", name, envID, err, envID),
 		)
 		return
 	}
@@ -491,6 +636,39 @@ func (r *environmentResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 	applyEnvironmentToModel(&state, env)
+
+	// Reconcile maintenance windows from acc-check ONLY when the operator manages
+	// them (prior state non-null). This detects out-of-band changes/deletions
+	// (EnvironmentShow returns them null; acc-check is the readable source) while
+	// preserving "omit = unmanaged": a null stays null with no probe, so an
+	// unmanaged env never has windows pulled into state.
+	//
+	// Two paths KEEP the last-known windows rather than blanking them (which would
+	// surface as false drift): a transient acc-check error, and a "not reported"
+	// response (acc-check returned null for the field — connector not synced). Only
+	// a confirmed result (known) — including a confirmed empty [] (deletion) — is
+	// reconciled into state.
+	if !state.MaintenanceWindows.IsNull() && !state.MaintenanceWindows.IsUnknown() {
+		windows, known, werr := r.client.GetEnvironmentMaintenanceWindows(ctx, id)
+		switch {
+		case werr != nil:
+			resp.Diagnostics.AddWarning(
+				"Could not refresh maintenance windows",
+				fmt.Sprintf("Reading maintenance windows for environment %d via acc-check failed: %s.\n\n"+
+					"Keeping the last-known windows in state; maintenance_windows drift is not detected this run.", id, werr.Error()),
+			)
+		case !known:
+			// acc-check did not report the field (null) — keep prior, don't blank.
+		default:
+			mws, d := maintenanceWindowsToSet(ctx, windows)
+			resp.Diagnostics.Append(d...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			state.MaintenanceWindows = mws
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -558,9 +736,115 @@ func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteReq
 	)
 }
 
-// ImportState imports by the ACM environment id.
+// ImportState imports by the ACM environment id, reconstructing as much state
+// from the API as it returns: the computed fields and cloud_provider/region (via
+// applyEnvironmentToModel), plus the datadog integration when present. Terraform
+// calls Read immediately after import with this state as the prior, and Read
+// preserves datadog (config-authoritative) so it survives.
+//
+// maintenance_windows are sourced from the acc-check endpoint (EnvironmentShow
+// returns them as null) — see GetEnvironmentMaintenanceWindows. That read is
+// best-effort: if acc-check fails, import still succeeds and emits a warning, and
+// the windows show as a diff on the first plan instead.
+//
+// One field still cannot be imported: datadog `api_key`. The API returns it, but
+// the provider deliberately never stores it (kept out of Terraform state, masked
+// in debug logs), so it imports as null and must be re-supplied in config — the
+// expected diff on the first post-import plan.
 func (r *environmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	id, err := parseACMID("id", req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid environment import id",
+			fmt.Sprintf("Import id must be the numeric ACM environment id "+
+				"(e.g. `terraform import altinity_environment.example 2293`): %s", err.Error()),
+		)
+		return
+	}
+
+	env, gerr := r.client.GetEnvironmentByID(ctx, id)
+	if gerr != nil {
+		resp.Diagnostics.AddError("Failed to read environment for import", gerr.Error())
+		return
+	}
+
+	var m environmentResourceModel
+	// Mark datadog as managed when the environment has it defined, so
+	// applyEnvironmentToModel reconciles its non-secret fields. api_key is
+	// write-only (null here) and apply_to_clusters is write-side (resolved to its
+	// default true by applyEnvironmentToModel).
+	if env.Datadog != nil {
+		m.Datadog = &datadogModel{
+			APIKey:          types.StringNull(),
+			ApplyToClusters: types.BoolNull(),
+		}
+	}
+	applyEnvironmentToModel(&m, env)
+
+	// Capture existing maintenance windows from acc-check (EnvironmentShow returns
+	// them null). Import policy: only manage them when acc-check confirms windows
+	// exist (known && non-empty). On error, an unreported (null) response, OR a
+	// confirmed-empty env, leave maintenance_windows null (unmanaged) — importing
+	// an env with no windows must not force the operator to manage an empty block.
+	// A failed read warns; the windows then surface as a diff on the first plan.
+	m.MaintenanceWindows = types.SetNull(types.ObjectType{AttrTypes: maintenanceWindowAttrTypes()})
+	windows, known, werr := r.client.GetEnvironmentMaintenanceWindows(ctx, id)
+	if werr != nil {
+		resp.Diagnostics.AddWarning(
+			"Could not import maintenance windows",
+			fmt.Sprintf("Reading maintenance windows for environment %d via acc-check failed: %s.\n\n"+
+				"Import succeeded without them; re-declare maintenance_windows in config and apply to re-sync.", id, werr.Error()),
+		)
+	} else if known && len(windows) > 0 {
+		mws, d := maintenanceWindowsToSet(ctx, windows)
+		resp.Diagnostics.Append(d...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		m.MaintenanceWindows = mws
+	}
+
+	// timeouts are provider-side config only (no API representation); leave null
+	// so the operator's configured block applies without showing as drift.
+	m.Timeouts = types.ObjectNull(map[string]attr.Type{
+		"create": types.StringType,
+		"update": types.StringType,
+		"delete": types.StringType,
+	})
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+// maintenanceWindowsToSet converts the API's maintenance windows (read from the
+// acc-check endpoint) into the resource's set value. Modeled as a set so neither
+// window order nor day order (both of which ACM may reorder) produces a diff.
+//
+// An empty input yields an EMPTY set (`[]`), NOT null: this is the reconcile path
+// (Read), where a confirmed-empty response on a managed attribute means "no
+// windows" — which must equal a config of `[]` (clear-all) to avoid churn, and
+// must differ from a config of `[{...}]` to surface a deletion as drift. The
+// "empty -> null (unmanaged)" decision is the IMPORT policy and lives in
+// ImportState, not here.
+func maintenanceWindowsToSet(ctx context.Context, windows []acm.MaintenanceWindow) (types.Set, diag.Diagnostics) {
+	objType := types.ObjectType{AttrTypes: maintenanceWindowAttrTypes()}
+	if len(windows) == 0 {
+		return types.SetValueFrom(ctx, objType, []maintenanceWindowModel{})
+	}
+	models := make([]maintenanceWindowModel, 0, len(windows))
+	for _, w := range windows {
+		days, d := types.SetValueFrom(ctx, types.StringType, w.Days)
+		if d.HasError() {
+			return types.SetNull(objType), d
+		}
+		models = append(models, maintenanceWindowModel{
+			Name:        types.StringValue(w.Name),
+			Enabled:     types.BoolValue(w.Enabled),
+			Hour:        types.Int64Value(int64(w.Hour)),
+			LengthHours: types.Int64Value(int64(w.LengthInHours)),
+			Days:        days,
+		})
+	}
+	return types.SetValueFrom(ctx, objType, models)
 }
 
 // envEditNeeded reports whether the plan has anything the EnvironmentEdit
@@ -616,6 +900,9 @@ func buildEnvEditRequest(ctx context.Context, plan environmentResourceModel) (ac
 		for _, m := range models {
 			var days []string
 			diags.Append(m.Days.ElementsAs(ctx, &days, false)...)
+			if diags.HasError() {
+				return req, diags
+			}
 			windows = append(windows, acm.MaintenanceWindow{
 				Name:          m.Name.ValueString(),
 				Enabled:       m.Enabled.ValueBool(),
@@ -629,18 +916,18 @@ func buildEnvEditRequest(ctx context.Context, plan environmentResourceModel) (ac
 	return req, diags
 }
 
-// weekdayListValidator rejects `days` entries that aren't uppercase weekday names.
-type weekdayListValidator struct{}
+// weekdaySetValidator rejects `days` entries that aren't uppercase weekday names.
+type weekdaySetValidator struct{}
 
-func (weekdayListValidator) Description(context.Context) string {
+func (weekdaySetValidator) Description(context.Context) string {
 	return "each day must be an uppercase weekday name (MONDAY…SUNDAY)"
 }
 
-func (v weekdayListValidator) MarkdownDescription(ctx context.Context) string {
+func (v weekdaySetValidator) MarkdownDescription(ctx context.Context) string {
 	return v.Description(ctx)
 }
 
-func (weekdayListValidator) ValidateList(ctx context.Context, req validator.ListRequest, resp *validator.ListResponse) {
+func (weekdaySetValidator) ValidateSet(ctx context.Context, req validator.SetRequest, resp *validator.SetResponse) {
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
