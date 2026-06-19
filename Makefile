@@ -6,7 +6,7 @@ BINARY := bin/terraform-provider-altinity
 HOSTNAME := registry.terraform.io
 NAMESPACE := gorgias-oss
 NAME := altinity
-VERSION := 0.1.0
+VERSION := 0.2.1
 OS_ARCH := $(shell go env GOOS)_$(shell go env GOARCH)
 INSTALL_DIR := $(HOME)/.terraform.d/plugins/$(HOSTNAME)/$(NAMESPACE)/$(NAME)/$(VERSION)/$(OS_ARCH)
 

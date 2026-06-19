@@ -123,8 +123,13 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Description: "Whether the user has ClickHouse access-management (RBAC) privileges. Updatable in place.",
 			},
 			"profile_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "Optional ACM-internal settings profile id (integer, stored as string) to attach to the user.",
+				Optional: true,
+				Description: "Optional ACM-internal settings profile id (integer, stored as string) to attach to the user. " +
+					"When omitted, the user is attached to the cluster's auto-maintained `default` profile, because ACM " +
+					"cannot create a user with no settings profile (it generates the invalid `SETTINGS PROFILE ''`, which " +
+					"ClickHouse rejects with a Code 62 syntax error). The `default` profile imposes no readonly restriction, " +
+					"matching a full-access user. The fallback is applied on the wire only; the configured value is kept " +
+					"verbatim in state, so omitting `profile_id` leaves it null (no spurious diff).",
 			},
 			"password": schema.StringAttribute{
 				Optional:    true,
@@ -132,8 +137,10 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Description: "The user password. Write-only at the API: sent on create/update but never returned on read, so it is preserved from prior state and excluded from drift detection.",
 			},
 			"user_id": schema.StringAttribute{
-				Computed:    true,
-				Description: "The ACM-internal user id (integer, stored as string).",
+				Computed: true,
+				Description: "The ACM-internal user id (integer, stored as string). Empty for users ACM stores in " +
+					"ClickHouse's `replicated` access storage (created via SQL, `hasModel: false`), which carry no " +
+					"numeric id; such users are managed by login instead.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -170,6 +177,15 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
+	// Resolve the fallback settings profile once (0 when profile_id is set):
+	// ACM cannot create a profile-less user, so an unset profile_id must map to
+	// the cluster's `default` profile on the wire (see resolveFallbackProfileID).
+	fallbackProfileID, err := r.resolveFallbackProfileID(ctx, clusterID, plan)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to resolve settings profile", err.Error())
+		return
+	}
+
 	// Adopt-by-login is wrapped in transient-SQL retry. Two intertwined
 	// failure modes both resolve by re-running the find-or-create:
 	//   1. ACM's operator hasn't finished propagating the parent cluster's
@@ -192,22 +208,40 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 			return lerr
 		}
 		if found {
-			// Reconcile the adopted user. Use the Update wire shape so
-			// access_management is sent explicitly (the operator's plan is
-			// the source of truth for an adopted resource — we just rebuild
-			// ACM's view to match).
-			apiReq, diagErr := r.buildUserRequest(plan, true)
+			// Reconcile the existing user via the cluster-scoped SQL endpoint,
+			// addressing it by ACM's numeric id when it has one and by login
+			// otherwise. ACM creates users (DbuserAdd) in ClickHouse's
+			// `replicated` access storage, which has NO numeric id
+			// (hasModel:false — live-confirmed on cluster 10163); the login is
+			// then the only stable handle. DbuserEditSql accepts either as its
+			// {id} path segment because it emits `ALTER USER '<name>'`.
+			//
+			// Use the CREATE wire shape (alwaysSendAccessMgmt=false), NOT the
+			// Update shape: this path also recovers a half-committed orphan from
+			// a failed prior Create, where the user was just created and never
+			// granted access management. Sending accessManagement=0 would make
+			// ACM emit a stray `REVOKE ACCESS MANAGEMENT` on that fresh user —
+			// the Code 62 SYNTAX_ERROR (surfaced as `{"data": false}`) the
+			// fresh-create path dodges (see buildUserRequest). An explicit
+			// access_management=true is still forwarded, so enabling RBAC at
+			// create time works; toggling it off on an established user goes
+			// through Update, where REVOKE is well-defined.
+			apiReq, diagErr := r.buildUserRequest(plan, false)
 			if diagErr != nil {
 				return fmt.Errorf("invalid profile_id: %w", diagErr)
 			}
+			if apiReq.IDProfile == 0 {
+				apiReq.IDProfile = fallbackProfileID
+			}
 			apiReq.Login = plan.Name.ValueString()
-			c, uerr := r.client.UpdateUser(ctx, clusterID, existing.ID, apiReq)
+			ref := userHandleFromID(existing.ID, plan.Name.ValueString())
+			c, uerr := r.client.UpdateUser(ctx, clusterID, ref, apiReq)
 			if uerr != nil {
 				return uerr
 			}
 			created = c
 			tflog.Info(ctx, "altinity_clickhouse_user: adopted existing user (matched by login)",
-				map[string]any{"cluster_id": plan.ClusterID.ValueString(), "login": plan.Name.ValueString(), "user_id": existing.ID})
+				map[string]any{"cluster_id": plan.ClusterID.ValueString(), "login": plan.Name.ValueString(), "user_ref": ref})
 			return nil
 		}
 		// Fresh create: omit access_management when false (see
@@ -216,6 +250,9 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 		apiReq, diagErr := r.buildUserRequest(plan, false)
 		if diagErr != nil {
 			return fmt.Errorf("invalid profile_id: %w", diagErr)
+		}
+		if apiReq.IDProfile == 0 {
+			apiReq.IDProfile = fallbackProfileID
 		}
 		c, cerr := r.client.CreateUser(ctx, clusterID, apiReq)
 		if cerr != nil {
@@ -232,7 +269,7 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 	r.applyUserToModel(&plan, &created)
 	resolveComputedUserFields(&plan, &created)
 	// Password is write-only; preserve the configured value (API never returns it).
-	plan.UserID = types.StringValue(strconv.FormatInt(created.ID, 10))
+	plan.UserID = userIDState(&created)
 	plan.ID = types.StringValue(userCompositeID(plan.ClusterID.ValueString(), plan.Name.ValueString()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -331,13 +368,10 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	// The ACM-internal id is carried in state (cluster_id + name are
-	// RequiresReplace, so they never change under Update).
-	userID, err := parseACMID("user_id", state.UserID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid user_id", err.Error())
-		return
-	}
+	// The user handle is carried in state: ACM's numeric id when the user has
+	// one, else the login (cluster_id + name are RequiresReplace, so the login
+	// never changes under Update). DbuserEditSql accepts either.
+	userRef := userHandle(state)
 	// The edit endpoint is cluster-scoped; cluster_id is RequiresReplace so it
 	// is identical in plan and state.
 	clusterID, err := parseACMID("cluster_id", plan.ClusterID.ValueString())
@@ -355,10 +389,20 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		resp.Diagnostics.AddError("Invalid profile_id", diagErr.Error())
 		return
 	}
+	// When profile_id is unset, attach the cluster's `default` profile on the
+	// wire — ACM rejects a profile-less user (generates `SETTINGS PROFILE ''`).
+	if apiReq.IDProfile == 0 {
+		fallbackProfileID, ferr := r.resolveFallbackProfileID(ctx, clusterID, plan)
+		if ferr != nil {
+			resp.Diagnostics.AddError("Failed to resolve settings profile", ferr.Error())
+			return
+		}
+		apiReq.IDProfile = fallbackProfileID
+	}
 	// Login is part of the update body (it is stable, but ACM expects it).
 	apiReq.Login = plan.Name.ValueString()
 
-	updated, err := r.client.UpdateUser(ctx, clusterID, userID, apiReq)
+	updated, err := r.client.UpdateUser(ctx, clusterID, userRef, apiReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update user", err.Error())
 		return
@@ -366,6 +410,9 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 	r.applyUserToModel(&plan, &updated)
 	resolveComputedUserFields(&plan, &updated)
+	// Preserve the stored handle verbatim (don't derive from `updated`): the
+	// identity is stable across Update, and for a replicated user `updated.ID`
+	// is 0 anyway. Carrying state.UserID forward keeps "" / a numeric id intact.
 	plan.UserID = state.UserID
 	plan.ID = types.StringValue(userCompositeID(plan.ClusterID.ValueString(), plan.Name.ValueString()))
 
@@ -379,18 +426,17 @@ func (r *userResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	userID, err := parseACMID("user_id", state.UserID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid user_id", err.Error())
-		return
-	}
+	// Address the user by its numeric id when present, else by login (ACM's
+	// replicated-storage users have no id — see acm.UpdateUser). DbuserRemoveSql
+	// accepts either as its {id} path segment.
+	userRef := userHandle(state)
 	clusterID, err := parseACMID("cluster_id", state.ClusterID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid cluster_id", err.Error())
 		return
 	}
 
-	if err := r.client.DeleteUser(ctx, clusterID, userID); err != nil {
+	if err := r.client.DeleteUser(ctx, clusterID, userRef); err != nil {
 		if acm.IsNotFound(err) {
 			// Already gone: treat as success (the framework removes from state).
 			return
@@ -459,6 +505,40 @@ func (r *userResource) buildUserRequest(m userResourceModel, alwaysSendAccessMgm
 	return req, nil
 }
 
+// defaultSettingsProfileName is ACM's auto-created, auto-maintained settings
+// profile present on every cluster. It is the fallback profile attached to a
+// user that does not configure profile_id (see resolveFallbackProfileID).
+const defaultSettingsProfileName = "default"
+
+// resolveFallbackProfileID returns the id_profile to send when the operator
+// left profile_id unset, and 0 when profile_id is set (no fallback needed).
+//
+// ACM's generated CREATE/ALTER USER SQL unconditionally appends
+// `SETTINGS PROFILE '<name>'`, resolving the user's id_profile to a name. An
+// absent profile renders as the invalid `SETTINGS PROFILE ''`, which ClickHouse
+// rejects with `Code: 62 SYNTAX_ERROR` (surfaced as ACM's `{"data": false}`).
+// So a truly profile-less user is impossible through the API. We fall back to
+// the cluster's `default` profile, which ACM creates and maintains on every
+// cluster and which imposes no readonly restriction — exactly the semantics a
+// profile-less ("full access") user is meant to have.
+//
+// The chosen id_profile is sent on the wire only; profile_id stays null in
+// state (configured-value-authoritative, like networks/databases/password —
+// see applyUserToModel) so an operator who omitted it sees no spurious diff.
+func (r *userResource) resolveFallbackProfileID(ctx context.Context, clusterID int64, m userResourceModel) (int64, error) {
+	if !m.ProfileID.IsNull() && !m.ProfileID.IsUnknown() && m.ProfileID.ValueString() != "" {
+		return 0, nil
+	}
+	def, found, err := r.client.FindProfileByName(ctx, clusterID, defaultSettingsProfileName)
+	if err != nil {
+		return 0, fmt.Errorf("resolving the cluster's %q settings profile (used because profile_id is unset): %w", defaultSettingsProfileName, err)
+	}
+	if !found {
+		return 0, fmt.Errorf("cluster %d has no %q settings profile to fall back on; set profile_id explicitly (ACM cannot create a user with no settings profile)", clusterID, defaultSettingsProfileName)
+	}
+	return def.ID, nil
+}
+
 // splitCSV splits an Optional+Computed comma-separated string attribute into a
 // []string the ACM wire layer expects. Null/unknown/empty inputs become nil
 // (omitempty drops the field). Whitespace around each element is trimmed.
@@ -510,7 +590,13 @@ func splitCSVString(s string) []string {
 func (r *userResource) applyUserToModel(m *userResourceModel, u *acm.User) {
 	m.Name = types.StringValue(u.Login)
 	m.AccessManagement = types.BoolValue(u.AccessManagement)
-	if u.IDProfile != 0 {
+	// profile_id is configured-value-authoritative. When the operator omitted
+	// it, the provider attaches the cluster's `default` profile on the wire
+	// (ACM rejects a profile-less user — see resolveFallbackProfileID), but
+	// state must stay null so the post-apply state matches the (null) config
+	// and no perpetual diff appears. Only refresh profile_id from the API when
+	// the operator actually set it.
+	if !m.ProfileID.IsNull() && !m.ProfileID.IsUnknown() && u.IDProfile != 0 {
 		m.ProfileID = types.StringValue(strconv.FormatInt(u.IDProfile, 10))
 	}
 }
@@ -528,6 +614,50 @@ func resolveComputedUserFields(m *userResourceModel, u *acm.User) {
 	if m.Databases.IsUnknown() || m.Databases.IsNull() {
 		m.Databases = sliceToStringList(splitCSVString(u.Databases))
 	}
+}
+
+// userHandle returns the {id} path value for the cluster-scoped SQL endpoints
+// (DbuserEditSql / DbuserRemoveSql): ACM's numeric user id when state carries
+// one, otherwise the login. ACM creates users in ClickHouse's `replicated`
+// access storage, which has no numeric id (see acm.UpdateUser), so the login is
+// the stable handle — and those endpoints accept it because they emit SQL keyed
+// on the user name. A stored "0" is treated as "no id" (defensive).
+func userHandle(m userResourceModel) string {
+	return userHandleFromID(parseUserIDOrZero(m.UserID), m.Name.ValueString())
+}
+
+// userHandleFromID returns id-as-string when id is non-zero, else the login.
+func userHandleFromID(id int64, login string) string {
+	if id != 0 {
+		return strconv.FormatInt(id, 10)
+	}
+	return login
+}
+
+// parseUserIDOrZero parses the stored user_id, returning 0 for the empty/unset
+// value used for replicated-storage users that have no ACM numeric id.
+func parseUserIDOrZero(v types.String) int64 {
+	if v.IsNull() || v.IsUnknown() {
+		return 0
+	}
+	id, err := strconv.ParseInt(v.ValueString(), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// userIDState maps a server-returned user into the computed user_id state value:
+// the numeric id as a string when ACM assigned one, or "" for a
+// `replicated`-storage user that has none (managed by login thereafter). Both ""
+// (set here) and null (e.g. after ImportState, which doesn't set user_id) are
+// treated identically by parseUserIDOrZero/userHandle — they resolve to the
+// login handle — so the two representations are interchangeable downstream.
+func userIDState(u *acm.User) types.String {
+	if u.ID != 0 {
+		return types.StringValue(strconv.FormatInt(u.ID, 10))
+	}
+	return types.StringValue("")
 }
 
 // userCompositeID builds the "<cluster_id>:<name>" resource id.

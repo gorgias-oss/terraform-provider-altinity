@@ -85,9 +85,24 @@ func TestUpdateUser_PathByID(t *testing.T) {
 	})
 	// Cluster-scoped edit (DbuserEditSql): the bare /user/{id} variant 404s
 	// "Cluster not found" live.
-	_, err := client.UpdateUser(context.Background(), 7, 99, UserRequest{Networks: []string{"10.0.0.0/8"}})
+	_, err := client.UpdateUser(context.Background(), 7, "99", UserRequest{Networks: []string{"10.0.0.0/8"}})
 	require.NoError(t, err)
 	assert.Equal(t, "/cluster/7/user/99", gotPath)
+}
+
+// TestUpdateUser_PathByLogin documents the replicated-storage case: ACM users
+// created via DbuserAdd have no numeric id (hasModel:false), so the provider
+// addresses them by login. DbuserEditSql accepts the login as its {id} segment
+// because it emits `ALTER USER '<name>'`.
+func TestUpdateUser_PathByLogin(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"data":{"login":"revenue_w","storage":"replicated"}}`))
+	})
+	_, err := client.UpdateUser(context.Background(), 7, "revenue_w", UserRequest{Networks: []string{"::/0"}})
+	require.NoError(t, err)
+	assert.Equal(t, "/cluster/7/user/revenue_w", gotPath)
 }
 
 func TestDeleteUser_ClusterScopedPath(t *testing.T) {
@@ -97,10 +112,23 @@ func TestDeleteUser_ClusterScopedPath(t *testing.T) {
 		gotMethod = r.Method
 		_, _ = w.Write([]byte(`{"data":{}}`))
 	})
-	err := client.DeleteUser(context.Background(), 7, 99)
+	err := client.DeleteUser(context.Background(), 7, "99")
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodDelete, gotMethod)
 	assert.Equal(t, "/cluster/7/user/99", gotPath)
+}
+
+// TestDeleteUser_PathByLogin: replicated-storage users (no numeric id) are
+// deleted by login — live-confirmed the ACM UI issues DELETE …/user/<login>.
+func TestDeleteUser_PathByLogin(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	})
+	err := client.DeleteUser(context.Background(), 7, "voice_w")
+	require.NoError(t, err)
+	assert.Equal(t, "/cluster/7/user/voice_w", gotPath)
 }
 
 func TestSettingsAndProfiles_RoundTrip(t *testing.T) {
