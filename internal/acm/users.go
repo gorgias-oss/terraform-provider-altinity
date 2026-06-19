@@ -94,16 +94,24 @@ func (c *Client) CreateUser(ctx context.Context, clusterID int64, req UserReques
 	return u, nil
 }
 
-// UpdateUser updates a DB user by its ACM-internal id, cluster-scoped
-// (POST /cluster/{cluster}/user/{id}, operationId DbuserEditSql). Runs the
-// generated SQL synchronously on the cluster and is gated by ACM's per-cluster
-// "Cluster check" pre-flight — fine for regular user resources but rejects the
-// admin user even on a healthy cluster (see UpdateUserGlobal).
-func (c *Client) UpdateUser(ctx context.Context, clusterID, userID int64, req UserRequest) (User, error) {
+// UpdateUser updates a DB user cluster-scoped (POST /cluster/{cluster}/user/{id},
+// operationId DbuserEditSql). Runs the generated SQL synchronously on the
+// cluster and is gated by ACM's per-cluster "Cluster check" pre-flight — fine
+// for regular user resources but rejects the admin user even on a healthy
+// cluster (see UpdateUserGlobal).
+//
+// userRef is the {id} path segment. This endpoint is SQL-backed (it emits
+// `ALTER USER '<name>'`), so the path is typed as a string and accepts EITHER
+// ACM's numeric user id OR the login. The latter is essential: users ACM
+// creates via DbuserAdd land in ClickHouse's `replicated` access storage with
+// `hasModel: false` and NO numeric id (live-confirmed on cluster 10163, ACM
+// build 25.8.x — only `users.xml` users like the bootstrap admin carry an id),
+// so the login is the only handle the provider can address them by.
+func (c *Client) UpdateUser(ctx context.Context, clusterID int64, userRef string, req UserRequest) (User, error) {
 	var w wire.DbUser
 	args := map[string]string{
 		"cluster": clusterIDArg(clusterID),
-		"id":      strconv.FormatInt(userID, 10),
+		"id":      userRef,
 	}
 	if err := c.doJSON(ctx, wire.OpDbuserEditSql, args, req, &w); err != nil {
 		return User{}, err
@@ -137,10 +145,12 @@ func (c *Client) UpdateUserGlobal(ctx context.Context, userID int64, req UserReq
 // so the cluster id must be in the path — matching create/list/update. A 404 is
 // surfaced as a *APIError so callers can treat already-deleted users as drift
 // via IsNotFound.
-func (c *Client) DeleteUser(ctx context.Context, clusterID, userID int64) error {
+// userRef is the {id} path segment: ACM's numeric user id when present, or the
+// login for `replicated`-storage users that have no id (see UpdateUser).
+func (c *Client) DeleteUser(ctx context.Context, clusterID int64, userRef string) error {
 	args := map[string]string{
 		"cluster": clusterIDArg(clusterID),
-		"id":      strconv.FormatInt(userID, 10),
+		"id":      userRef,
 	}
 	return c.doJSON(ctx, wire.OpDbuserRemoveSql, args, nil, nil)
 }

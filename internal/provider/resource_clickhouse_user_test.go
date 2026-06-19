@@ -150,6 +150,11 @@ func TestUserResource_Create_SendsPasswordAndPreservesIt(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		// Create flow: FindUserByName lookup (GET) then CreateUser (POST).
 		if req.Method == http.MethodGet {
+			// profile_id-unset Create resolves the cluster's `default` profile.
+			if strings.HasSuffix(req.URL.Path, "/profiles") {
+				_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"data":[]}`))
 			return
 		}
@@ -207,6 +212,11 @@ func TestUserResource_Create_PreservesConfigNetworksOverCanonicalization(t *test
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Method == http.MethodGet {
+			// profile_id-unset Create resolves the cluster's `default` profile.
+			if strings.HasSuffix(req.URL.Path, "/profiles") {
+				_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"data":[]}`))
 			return
 		}
@@ -245,6 +255,11 @@ func TestUserResource_Create_OmitsAccessManagementOnFalse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Method == http.MethodGet {
+			// profile_id-unset Create resolves the cluster's `default` profile.
+			if strings.HasSuffix(req.URL.Path, "/profiles") {
+				_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"data":[]}`))
 			return
 		}
@@ -271,6 +286,77 @@ func TestUserResource_Create_OmitsAccessManagementOnFalse(t *testing.T) {
 		"Create request must omit accessManagement when false to avoid ACM SQL syntax error")
 }
 
+// TestUserResource_Create_NullProfileFallsBackToDefault locks the fix for the
+// profile-less-user failure: ACM cannot create a user with no settings profile
+// (it generates the invalid `SETTINGS PROFILE ''`, Code 62). When profile_id is
+// unset, the provider must resolve the cluster's `default` profile and send its
+// id on the wire — while keeping profile_id null in state (no spurious diff).
+func TestUserResource_Create_NullProfileFallsBackToDefault(t *testing.T) {
+	var createBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/profiles"):
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"7","name":"readonly","id_cluster":"7"},
+				{"id":"5","name":"default","id_cluster":"7"}
+			]}`))
+		case req.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case req.Method == http.MethodPost && req.URL.Path == "/cluster/7/users":
+			b, _ := io.ReadAll(req.Body)
+			createBody = string(b)
+			_, _ = w.Write([]byte(`{"data":{"id":"99","login":"app","id_cluster":"7","id_profile":"5"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+	req := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: sch, Raw: userPlanValue(objType, userVals{
+			clusterID: "7", name: "app", password: "pw", accessSet: true,
+			// profileID intentionally unset.
+		})},
+	}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch, Raw: tftypes.NewValue(objType, nil)}}
+	r.Create(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Contains(t, createBody, `"id_profile":5`,
+		"unset profile_id must fall back to the cluster's `default` profile id on the wire")
+
+	var model userResourceModel
+	require.False(t, resp.State.Get(context.Background(), &model).HasError())
+	assert.True(t, model.ProfileID.IsNull(),
+		"profile_id must stay null in state when the operator omitted it (no spurious diff)")
+}
+
+// TestUserResource_Create_NullProfileNoDefaultErrors verifies the provider
+// fails with an actionable error (rather than letting ACM emit the malformed
+// SQL) when profile_id is unset and the cluster has no `default` profile.
+func TestUserResource_Create_NullProfileNoDefaultErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// No `default` in the cluster's profile list.
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+	req := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: sch, Raw: userPlanValue(objType, userVals{
+			clusterID: "7", name: "app", password: "pw", accessSet: true,
+		})},
+	}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch, Raw: tftypes.NewValue(objType, nil)}}
+	r.Create(context.Background(), req, &resp)
+	require.True(t, resp.Diagnostics.HasError(), "expected an error when no default profile exists")
+}
+
 // TestUserResource_Create_AdoptsExistingUserByLogin reproduces the live
 // failure recovery: ACM commits a user row before running its generated
 // ClickHouse SQL, so a SQL syntax error leaves an orphaned user. On retry
@@ -282,6 +368,9 @@ func TestUserResource_Create_AdoptsExistingUserByLogin(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/profiles"):
+			// profile_id-unset Create resolves the cluster's `default` profile.
+			_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
 		case req.Method == http.MethodGet:
 			// Adopt path: an existing user matches the login.
 			_, _ = w.Write([]byte(`{"data":[{"id":"42","login":"app","id_cluster":"7"}]}`))
@@ -313,11 +402,128 @@ func TestUserResource_Create_AdoptsExistingUserByLogin(t *testing.T) {
 	assert.False(t, sawCreate, "must NOT POST a duplicate create when adopting")
 	assert.True(t, sawUpdate, "must reconcile via UpdateUser when an existing user matches")
 	assert.Contains(t, updateBody, `"password":"rotated"`, "adopt path must push the configured password")
+	// The adopt path here recovers a half-committed orphan from a failed prior
+	// Create: the user was just created and never granted access management, so
+	// the request MUST omit accessManagement when false — otherwise ACM emits a
+	// stray REVOKE ACCESS MANAGEMENT on that fresh user (Code 62 SYNTAX_ERROR /
+	// `{"data": false}`), the exact bug the fresh-create path dodges.
+	assert.NotContains(t, updateBody, "accessManagement",
+		"adopt path must omit accessManagement when false to avoid ACM's stray REVOKE (Code 62)")
 
 	var model userResourceModel
 	require.False(t, resp.State.Get(context.Background(), &model).HasError())
 	assert.Equal(t, "42", model.UserID.ValueString(), "user_id reflects the ADOPTED user")
 	assert.Equal(t, "7:app", model.ID.ValueString())
+}
+
+// TestUserResource_Create_AdoptSendsAccessManagementWhenTrue locks the other
+// half of the adopt-path contract: when access_management is explicitly true,
+// the reconcile request MUST still send accessManagement=1 so enabling RBAC at
+// create time works. Only the false case is omitted (to dodge ACM's stray
+// REVOKE on a freshly-orphaned user).
+func TestUserResource_Create_AdoptSendsAccessManagementWhenTrue(t *testing.T) {
+	var updateBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/profiles"):
+			// profile_id-unset Create resolves the cluster's `default` profile.
+			_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+		case req.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":[{"id":"42","login":"app","id_cluster":"7"}]}`))
+		case req.Method == http.MethodPost && req.URL.Path == "/cluster/7/user/42":
+			b, _ := io.ReadAll(req.Body)
+			updateBody = string(b)
+			_, _ = w.Write([]byte(`{"data":{"id":"42","login":"app","id_cluster":"7","accessManagement":1}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+	req := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: sch, Raw: userPlanValue(objType, userVals{
+			clusterID: "7", name: "app", password: "pw",
+			accessManagement: true, accessSet: true,
+		})},
+	}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch, Raw: tftypes.NewValue(objType, nil)}}
+	r.Create(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Contains(t, updateBody, `"accessManagement":1`,
+		"adopt path must still send accessManagement=1 when explicitly enabled")
+}
+
+// TestUserResource_Create_AdoptNullIDByLogin reproduces the live ACM behavior
+// where DbuserList returns `"id": null` for replicated-storage users (created
+// via DbuserAdd, hasModel:false). The provider must reconcile such an existing
+// user by LOGIN — POST /cluster/7/user/<login> — because DbuserEditSql accepts
+// the login as its {id} segment. It must NOT POST to /user/0. user_id is left
+// empty in state, and the resource is thereafter managed by login.
+func TestUserResource_Create_AdoptNullIDByLogin(t *testing.T) {
+	var updatePath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/profiles"):
+			_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+		case req.Method == http.MethodGet:
+			// ACM's list returns a null id for the existing replicated user.
+			_, _ = w.Write([]byte(`{"data":[{"id":null,"login":"app","id_cluster":"7"}]}`))
+		case req.Method == http.MethodPost:
+			updatePath = req.URL.Path
+			_, _ = w.Write([]byte(`{"data":{"login":"app","id_cluster":"7","storage":"replicated"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+	req := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: sch, Raw: userPlanValue(objType, userVals{
+			clusterID: "7", name: "app", password: "pw", accessSet: true,
+		})},
+	}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch, Raw: tftypes.NewValue(objType, nil)}}
+	r.Create(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Equal(t, "/cluster/7/user/app", updatePath,
+		"a null-id (replicated) user must be reconciled by login, not via /user/0")
+
+	var model userResourceModel
+	require.False(t, resp.State.Get(context.Background(), &model).HasError())
+	assert.Equal(t, "", model.UserID.ValueString(),
+		"replicated user has no numeric id; user_id stays empty (managed by login)")
+}
+
+// TestUserResource_Delete_ByLoginWhenNoNumericID verifies that a user whose
+// state has no numeric user_id (replicated storage) is deleted by login.
+func TestUserResource_Delete_ByLoginWhenNoNumericID(t *testing.T) {
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotPath = req.URL.Path
+		gotMethod = req.Method
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+	// userID empty → managed by login.
+	state := userVals{clusterID: "7", name: "app", id: "7:app", userID: "", accessSet: true}
+	req := resource.DeleteRequest{State: tfsdk.State{Schema: sch, Raw: userStateValue(objType, state)}}
+	resp := resource.DeleteResponse{State: tfsdk.State{Schema: sch, Raw: userStateValue(objType, state)}}
+	r.Delete(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Equal(t, http.MethodDelete, gotMethod)
+	assert.Equal(t, "/cluster/7/user/app", gotPath, "must delete by login when there is no numeric id")
 }
 
 func TestUserResource_Create_InvalidClusterID(t *testing.T) {
@@ -334,7 +540,17 @@ func TestUserResource_Create_InvalidClusterID(t *testing.T) {
 }
 
 func TestUserResource_Create_InvalidProfileID(t *testing.T) {
-	client := acm.NewClient("http://unused", "tok")
+	// Serve an empty user list so FindUserByName returns not-found and Create
+	// reaches buildUserRequest, where the non-integer profile_id fails to parse.
+	// (A non-empty profile_id makes resolveFallbackProfileID return early, so the
+	// profiles endpoint is never hit.) Without a real server the GET would fail
+	// with a network error and the test would pass for the wrong reason.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
 	r := newUserResource(t, client)
 	objType, sch := userSchemaOf(t, r)
 
@@ -344,6 +560,9 @@ func TestUserResource_Create_InvalidProfileID(t *testing.T) {
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch, Raw: tftypes.NewValue(objType, nil)}}
 	r.Create(context.Background(), req, &resp)
 	require.True(t, resp.Diagnostics.HasError())
+	// Assert it failed for the RIGHT reason (profile_id parse), not a network error.
+	assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "profile_id",
+		"must fail on the invalid profile_id, not some upstream error")
 }
 
 func TestUserResource_Read_MatchesByNameAndPreservesPassword(t *testing.T) {
@@ -390,6 +609,31 @@ func TestUserResource_Read_MatchesByNameAndPreservesPassword(t *testing.T) {
 	assert.Equal(t, "s3cret", model.Password.ValueString())
 }
 
+// TestUserResource_Read_PreservesEmptyUserID locks the replicated-user case:
+// ACM's list returns a null id, so Read must leave the empty user_id intact
+// (the user is managed by login) rather than overwriting it.
+func TestUserResource_Read_PreservesEmptyUserID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":null,"login":"app","id_cluster":"7","storage":"replicated"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+	prior := userVals{clusterID: "7", name: "app", networks: "::/0", id: "7:app", userID: "", accessSet: true}
+	req := resource.ReadRequest{State: tfsdk.State{Schema: sch, Raw: userStateValue(objType, prior)}}
+	resp := resource.ReadResponse{State: tfsdk.State{Schema: sch, Raw: userStateValue(objType, prior)}}
+	r.Read(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	var model userResourceModel
+	require.False(t, resp.State.Get(context.Background(), &model).HasError())
+	assert.Equal(t, "", model.UserID.ValueString(), "empty user_id (replicated user) must survive Read")
+	assert.Equal(t, "7:app", model.ID.ValueString())
+}
+
 func TestUserResource_Read_RemovedOutOfBand(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -431,11 +675,16 @@ func TestUserResource_Read_ClusterNotFound(t *testing.T) {
 func TestUserResource_Update_PostsToUserID(t *testing.T) {
 	var gotPath, gotMethod, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// profile_id-unset Update resolves the cluster's `default` profile first.
+		if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/profiles") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+			return
+		}
 		gotPath = req.URL.Path
 		gotMethod = req.Method
 		b, _ := io.ReadAll(req.Body)
 		gotBody = string(b)
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"id":"99","login":"app","networks":"172.16.0.0/12","databases":"default","id_cluster":"7"}}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -466,6 +715,47 @@ func TestUserResource_Update_PostsToUserID(t *testing.T) {
 	assert.Equal(t, "172.16.0.0/12", model.Networks.ValueString())
 	// Password preserved from plan.
 	assert.Equal(t, "new", model.Password.ValueString())
+}
+
+// TestUserResource_Update_PostsToLoginWhenNoNumericID is the symmetric case to
+// the numeric-id Update above: a replicated user has an empty user_id, so the
+// update must address it by login (POST /cluster/7/user/<login>).
+func TestUserResource_Update_PostsToLoginWhenNoNumericID(t *testing.T) {
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/profiles") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"5","name":"default","id_cluster":"7"}]}`))
+			return
+		}
+		gotPath = req.URL.Path
+		gotMethod = req.Method
+		_, _ = w.Write([]byte(`{"data":{"login":"app","networks":"::/0","databases":"default","id_cluster":"7","storage":"replicated"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "tok", acm.WithHTTPClient(srv.Client()))
+
+	r := newUserResource(t, client)
+	objType, sch := userSchemaOf(t, r)
+
+	// Empty user_id → managed by login.
+	state := userVals{clusterID: "7", name: "app", networks: "::/0", databases: "default", password: "old", id: "7:app", userID: "", accessSet: true}
+	plan := userVals{clusterID: "7", name: "app", networks: "::/0", databases: "default", password: "new", id: "7:app", userID: "", accessSet: true}
+
+	req := resource.UpdateRequest{
+		Plan:  tfsdk.Plan{Schema: sch, Raw: userStateValue(objType, plan)},
+		State: tfsdk.State{Schema: sch, Raw: userStateValue(objType, state)},
+	}
+	resp := resource.UpdateResponse{State: tfsdk.State{Schema: sch, Raw: userStateValue(objType, state)}}
+	r.Update(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Equal(t, "/cluster/7/user/app", gotPath, "must update by login when there is no numeric id")
+
+	var model userResourceModel
+	require.False(t, resp.State.Get(context.Background(), &model).HasError())
+	assert.Equal(t, "", model.UserID.ValueString(), "user_id stays empty for a login-managed user")
 }
 
 func TestUserResource_Delete_DeletesByUserID(t *testing.T) {

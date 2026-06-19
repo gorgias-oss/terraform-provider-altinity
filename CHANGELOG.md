@@ -4,6 +4,53 @@ All notable changes to this provider will be documented in this file. The
 format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the provider follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.2.1] — 2026-06-19
+
+### Fixed
+
+- `altinity_clickhouse_user` — users could not be created/managed on clusters
+  where ACM stores them in ClickHouse's `replicated` access storage. ACM's
+  `DbuserAdd` runs `CREATE USER … ON CLUSTER`, which lands the user in
+  `replicated` storage with `hasModel: false` and **no ACM-internal numeric id**
+  (only `users.xml` users like the bootstrap admin get one). The provider keyed
+  update/delete on that numeric id, so `DbuserList` returning `"id": null` left
+  every user unmanageable: the adopt-on-create path POSTed to
+  `/cluster/{cluster}/user/0`, ACM ran the SQL (clean audit log) but resolved no
+  row and returned `{"data": false}`, which was retried for ~9 minutes and then
+  failed. The provider now addresses these users by **login** — the cluster-
+  scoped SQL endpoints (`DbuserEditSql`/`DbuserRemoveSql`) accept the login as
+  their `{id}` path segment because they emit `ALTER USER '<name>'` /
+  `DROP USER '<name>'`. `user_id` is still populated when ACM assigns a numeric
+  id and is left empty otherwise; update and delete fall back to the login. (The
+  composite resource id `<cluster_id>:<name>` is unchanged.)
+- `altinity_clickhouse_user` — a user with no `profile_id` could not be created.
+  ACM's generated `CREATE USER` SQL always appends `SETTINGS PROFILE '<name>'`
+  and renders an absent profile as the invalid `SETTINGS PROFILE ''`, which
+  ClickHouse rejects with `Code: 62 SYNTAX_ERROR`. The provider now falls back
+  to the cluster's auto-maintained `default` settings profile when `profile_id`
+  is unset (on Create **and** Update), attaching it on the wire only — the
+  configured value is kept verbatim in state, so omitting `profile_id` leaves it
+  null with no spurious diff. The `default` profile imposes no readonly
+  restriction, matching a full-access user. If a cluster has no `default`
+  profile, Create/Update now fails fast with an actionable error instead of
+  letting ACM emit malformed SQL.
+- `altinity_clickhouse_user` — the Create-time **adopt path** (which recovers a
+  user that ACM half-committed before a prior Create's SQL failed) sent
+  `accessManagement=0` for a user with `access_management = false`. On a
+  freshly-orphaned user that was never granted access management, ACM emits a
+  stray `REVOKE ACCESS MANAGEMENT` statement that ClickHouse rejects with
+  `Code: 62 SYNTAX_ERROR` (surfaced as ACM's `{"data": false}` envelope). The
+  provider classifies that as a transient distributed-DDL race, so it retried
+  for ~9 minutes and then failed the apply. The adopt path now uses the same
+  wire shape as a fresh create — omitting `accessManagement` when `false` (the
+  exact workaround the fresh-create path already applied) — so reconciling an
+  orphan no longer triggers the stray REVOKE. An explicit
+  `access_management = true` is still sent, so enabling RBAC at create time is
+  unaffected; toggling it off on an established user still goes through Update,
+  where `REVOKE` is well-defined.
+
 ## [0.2.0] — 2026-06-12
 
 ### BREAKING

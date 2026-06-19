@@ -54,12 +54,12 @@ resource "altinity_clickhouse_user" "example" {
 - `databases` (List of String) List of database NAMES the user may access (e.g. `["default"]` for one database, `["default", "analytics"]` for several). ACM expands each entry into a `GRANT ALL ON \`<db>\`.* TO <user>` statement server-side, so do NOT pre-qualify entries with `.*` or table names. Omit the attribute (or pass `[]`) to grant access to ALL databases (`*.*`). Updatable in place. The configured value is kept verbatim in state for round-trip stability against ACM's server-side canonicalization.
 - `networks` (String) Allowed source networks for the user (e.g. `::/0`). Updatable in place via /user/{id}. ACM canonicalizes this server-side (e.g. `0.0.0.0/0` becomes `::/0`), so the configured value is treated as authoritative and kept verbatim in state; out-of-band changes are not detected.
 - `password` (String, Sensitive) The user password. Write-only at the API: sent on create/update but never returned on read, so it is preserved from prior state and excluded from drift detection.
-- `profile_id` (String) Optional ACM-internal settings profile id (integer, stored as string) to attach to the user.
+- `profile_id` (String) Optional ACM-internal settings profile id (integer, stored as string) to attach to the user. When omitted, the user is attached to the cluster's auto-maintained `default` profile, because ACM cannot create a user with no settings profile (it generates the invalid `SETTINGS PROFILE ''`, which ClickHouse rejects with a Code 62 syntax error). The `default` profile imposes no readonly restriction, matching a full-access user. The fallback is applied on the wire only; the configured value is kept verbatim in state, so omitting `profile_id` leaves it null (no spurious diff).
 
 ### Read-Only
 
 - `id` (String) Composite identifier `<cluster_id>:<name>`.
-- `user_id` (String) The ACM-internal user id (integer, stored as string).
+- `user_id` (String) The ACM-internal user id (integer, stored as string). Empty for users ACM stores in ClickHouse's `replicated` access storage (created via SQL, `hasModel: false`), which carry no numeric id; such users are managed by login instead.
 
 ## Import
 
