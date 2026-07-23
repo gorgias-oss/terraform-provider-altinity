@@ -1833,6 +1833,8 @@ func (versionDowngradeGuard) PlanModifyString(_ context.Context, req planmodifie
 // data_path/zookeeper/ip_whitelist are Optional-only (NOT Computed), so they
 // are never unknown and intentionally excluded here.
 var computedStringFields = []func(*clusterResourceModel) *types.String{
+	// type is omitted by ACM for the standard ClickHouse cluster shape.
+	func(m *clusterResourceModel) *types.String { return &m.Type },
 	// node_type/memory/size/storage_class: not present in the Cluster response
 	// top-level (they live in per-node NodeType objects). Map once a future
 	// spike confirms the read path.

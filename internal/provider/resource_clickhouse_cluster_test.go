@@ -1278,6 +1278,7 @@ func TestClusterResource_Create_NoUnknownState(t *testing.T) {
 	plan := baseState()
 	plan.ID = types.StringNull()
 	plan.AdminPass = types.StringValue("pw")
+	plan.Type = types.StringUnknown()
 	plan.NodeType = types.StringUnknown()
 	plan.Memory = types.StringUnknown()
 	plan.Size = types.StringUnknown()
@@ -1301,6 +1302,7 @@ func TestClusterResource_Create_NoUnknownState(t *testing.T) {
 	// Every attribute the API does not read back must be resolved to a known
 	// value (null), not left unknown.
 	unknowns := map[string]bool{
+		"type":      out.Type.IsUnknown(),
 		"node_type": out.NodeType.IsUnknown(), "memory": out.Memory.IsUnknown(),
 		"size": out.Size.IsUnknown(), "storage_class": out.StorageClass.IsUnknown(),
 		"iops":       out.IOPS.IsUnknown(),
