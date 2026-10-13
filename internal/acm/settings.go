@@ -19,17 +19,23 @@ import (
 // TODO(spike): confirm the exact request/response shape for cluster settings
 // from a captured /cluster/{cluster}/settings payload. The name/value pair is
 // the expected minimum; additional fields are carried via Extra raw passthrough.
+//
+// ValueFrom is a pointer so that nil omits the key while a pointer to "" sends
+// an explicit empty string, which is how a secret reference is cleared when a
+// setting switches back to a plain value.
 type SettingRequest struct {
-	Name  string `json:"name"`
-	Value string `json:"value,omitempty"`
+	Name      string  `json:"name"`
+	Value     string  `json:"value,omitempty"`
+	ValueFrom *string `json:"valueFrom,omitempty"`
 }
 
 // settingWire is the hand-modeled wire shape for a single setting list entry.
 // TODO(spike): confirm fields.
 type settingWire struct {
-	ID    wire.Number `json:"id,omitempty"`
-	Name  string      `json:"name,omitempty"`
-	Value string      `json:"value,omitempty"`
+	ID        wire.Number `json:"id,omitempty"`
+	Name      string      `json:"name,omitempty"`
+	Value     string      `json:"value,omitempty"`
+	ValueFrom string      `json:"valueFrom,omitempty"`
 }
 
 // ListSettings reads all cluster-level settings
@@ -47,7 +53,7 @@ func (c *Client) ListSettings(ctx context.Context, clusterID int64) ([]Setting, 
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Setting{ID: id, Name: raw[i].Name, Value: raw[i].Value})
+		out = append(out, Setting{ID: id, Name: raw[i].Name, Value: raw[i].Value, ValueFrom: raw[i].ValueFrom})
 	}
 	return out, nil
 }
@@ -81,7 +87,7 @@ func (c *Client) CreateSetting(ctx context.Context, clusterID int64, req Setting
 	if err != nil {
 		return Setting{}, err
 	}
-	return Setting{ID: id, Name: w.Name, Value: w.Value}, nil
+	return Setting{ID: id, Name: w.Name, Value: w.Value, ValueFrom: w.ValueFrom}, nil
 }
 
 // EditSetting updates a setting's value by its ACM-internal id
@@ -96,7 +102,7 @@ func (c *Client) EditSetting(ctx context.Context, settingID int64, req SettingRe
 	if err != nil {
 		return Setting{}, err
 	}
-	return Setting{ID: id, Name: w.Name, Value: w.Value}, nil
+	return Setting{ID: id, Name: w.Name, Value: w.Value, ValueFrom: w.ValueFrom}, nil
 }
 
 // DeleteSetting removes a cluster-level setting by its ACM-internal id

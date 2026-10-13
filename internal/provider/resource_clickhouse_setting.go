@@ -22,9 +22,10 @@ import (
 
 // Ensure the resource satisfies the framework interfaces.
 var (
-	_ resource.Resource                = (*settingResource)(nil)
-	_ resource.ResourceWithConfigure   = (*settingResource)(nil)
-	_ resource.ResourceWithImportState = (*settingResource)(nil)
+	_ resource.Resource                   = (*settingResource)(nil)
+	_ resource.ResourceWithConfigure      = (*settingResource)(nil)
+	_ resource.ResourceWithImportState    = (*settingResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*settingResource)(nil)
 )
 
 // settingResource manages a single cluster-level ClickHouse setting
@@ -49,6 +50,7 @@ type settingResourceModel struct {
 	ClusterID types.String `tfsdk:"cluster_id"`
 	Name      types.String `tfsdk:"name"`
 	Value     types.String `tfsdk:"value"`
+	ValueFrom types.String `tfsdk:"value_from"`
 	SettingID types.String `tfsdk:"setting_id"`
 }
 
@@ -86,8 +88,17 @@ func (r *settingResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Validators: []validator.String{noColonValidator{}},
 			},
 			"value": schema.StringAttribute{
-				Required:    true,
-				Description: "The setting value.",
+				Optional: true,
+				Description: "The setting value. Exactly one of value or value_from " +
+					"must be set.",
+			},
+			"value_from": schema.StringAttribute{
+				Optional: true,
+				Description: "A Kubernetes secret reference in the form " +
+					`"<secret-name>/<key>" that ACM resolves in place of value ` +
+					"(the \"Value From\" field of the ACM settings UI). The secret must " +
+					"exist in the cluster's namespace. Exactly one of value or " +
+					"value_from must be set.",
 			},
 			"setting_id": schema.StringAttribute{
 				Computed: true,
@@ -117,6 +128,24 @@ func (r *settingResource) Configure(_ context.Context, req resource.ConfigureReq
 	r.client = client
 }
 
+// ValidateConfig enforces that exactly one of value and value_from is set.
+// Unknown values are skipped so references to other resources still plan.
+func (r *settingResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg settingResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if cfg.Value.IsUnknown() || cfg.ValueFrom.IsUnknown() {
+		return
+	}
+	if cfg.Value.IsNull() == cfg.ValueFrom.IsNull() {
+		resp.Diagnostics.AddAttributeError(path.Root("value"),
+			"Invalid setting value",
+			"Exactly one of value or value_from must be set.")
+	}
+}
+
 func (r *settingResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan settingResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -131,6 +160,10 @@ func (r *settingResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	req2 := acm.SettingRequest{Name: plan.Name.ValueString(), Value: plan.Value.ValueString()}
+	if !plan.ValueFrom.IsNull() {
+		vf := plan.ValueFrom.ValueString()
+		req2.ValueFrom = &vf
+	}
 
 	// Idempotent adopt-by-name wrapped in transient-Create-race retry. Two
 	// failure modes both resolve by re-running the find-or-create:
@@ -146,8 +179,15 @@ func (r *settingResource) Create(ctx context.Context, req resource.CreateRequest
 		}
 		if found {
 			created = existing
-			if plan.Value.ValueString() != existing.Value {
-				c, eerr := r.client.EditSetting(ctx, existing.ID, req2)
+			if plan.Value.ValueString() != existing.Value || plan.ValueFrom.ValueString() != existing.ValueFrom {
+				// Edit always states valueFrom so a plain value clears a
+				// reference left on the adopted row.
+				editReq := req2
+				if editReq.ValueFrom == nil {
+					empty := ""
+					editReq.ValueFrom = &empty
+				}
+				c, eerr := r.client.EditSetting(ctx, existing.ID, editReq)
 				if eerr != nil {
 					return eerr
 				}
@@ -168,7 +208,9 @@ func (r *settingResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	plan.Name = types.StringValue(created.Name)
-	plan.Value = types.StringValue(created.Value)
+	if plan.ValueFrom.IsNull() {
+		plan.Value = types.StringValue(created.Value)
+	}
 	plan.SettingID = types.StringValue(strconv.FormatInt(created.ID, 10))
 	plan.ID = types.StringValue(settingCompositeID(plan.ClusterID.ValueString(), created.Name))
 
@@ -219,7 +261,15 @@ func (r *settingResource) Read(ctx context.Context, req resource.ReadRequest, re
 	}
 
 	state.Name = types.StringValue(found.Name)
-	state.Value = types.StringValue(found.Value)
+	if found.ValueFrom != "" {
+		// ACM reports an empty value next to the reference; keep value null so
+		// it matches a config that only sets value_from.
+		state.ValueFrom = types.StringValue(found.ValueFrom)
+		state.Value = types.StringNull()
+	} else {
+		state.Value = types.StringValue(found.Value)
+		state.ValueFrom = types.StringNull()
+	}
 	state.SettingID = types.StringValue(strconv.FormatInt(found.ID, 10))
 	state.ID = types.StringValue(settingCompositeID(state.ClusterID.ValueString(), found.Name))
 
@@ -243,9 +293,13 @@ func (r *settingResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
+	// value_from is always sent: an explicit empty string clears a reference
+	// when the setting switches back to a plain value.
+	valueFrom := plan.ValueFrom.ValueString()
 	if _, err := r.client.EditSetting(ctx, settingID, acm.SettingRequest{
-		Name:  plan.Name.ValueString(),
-		Value: plan.Value.ValueString(),
+		Name:      plan.Name.ValueString(),
+		Value:     plan.Value.ValueString(),
+		ValueFrom: &valueFrom,
 	}); err != nil {
 		resp.Diagnostics.AddError("Failed to update setting", err.Error())
 		return

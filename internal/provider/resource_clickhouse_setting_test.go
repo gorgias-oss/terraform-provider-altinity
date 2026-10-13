@@ -309,3 +309,160 @@ func TestSettingResource_SplitCompositeIDLastColon(t *testing.T) {
 	assert.Equal(t, "7", clusterID)
 	assert.Equal(t, "max_threads", name)
 }
+
+func TestSettingResource_CreateValueFrom(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case http.MethodPost:
+			buf, _ := io.ReadAll(req.Body)
+			gotBody = string(buf)
+			_, _ = w.Write([]byte(`{"data":{"id":"43","name":"interserver_http_credentials/password","value":"","valueFrom":"example-secret/password"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "test-token", acm.WithHTTPClient(srv.Client()))
+
+	r := newSettingResource(client)
+	objType, sr := settingObjType(t, r)
+
+	planVal := settingValue(objType, map[string]string{
+		"cluster_id": "7",
+		"name":       "interserver_http_credentials/password",
+		"value_from": "example-secret/password",
+	})
+	req := resource.CreateRequest{Plan: tfsdk.Plan{Schema: sr.Schema, Raw: planVal}}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sr.Schema, Raw: tftypes.NewValue(objType, nil)}}
+	r.Create(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Contains(t, gotBody, `"valueFrom":"example-secret/password"`)
+	assert.NotContains(t, gotBody, `"value":`)
+
+	var state settingResourceModel
+	resp.State.Get(context.Background(), &state)
+	assert.True(t, state.Value.IsNull(), "value stays null when value_from is set")
+	assert.Equal(t, "example-secret/password", state.ValueFrom.ValueString())
+	assert.Equal(t, "43", state.SettingID.ValueString())
+}
+
+func TestSettingResource_CreateOmitsValueFromForPlainValue(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case http.MethodPost:
+			buf, _ := io.ReadAll(req.Body)
+			gotBody = string(buf)
+			_, _ = w.Write([]byte(`{"data":{"id":"42","name":"max_threads","value":"8"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "test-token", acm.WithHTTPClient(srv.Client()))
+
+	r := newSettingResource(client)
+	objType, sr := settingObjType(t, r)
+	planVal := settingValue(objType, map[string]string{"cluster_id": "7", "name": "max_threads", "value": "8"})
+	req := resource.CreateRequest{Plan: tfsdk.Plan{Schema: sr.Schema, Raw: planVal}}
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sr.Schema, Raw: tftypes.NewValue(objType, nil)}}
+	r.Create(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.NotContains(t, gotBody, "valueFrom")
+}
+
+func TestSettingResource_ReadValueFrom(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"43","name":"interserver_http_credentials/password","value":"","valueFrom":"example-secret/password"},
+			{"id":"44","name":"max_threads","value":"16","valueFrom":""}
+		]}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "test-token", acm.WithHTTPClient(srv.Client()))
+
+	r := newSettingResource(client)
+	objType, sr := settingObjType(t, r)
+
+	read := func(name string) settingResourceModel {
+		stateVal := settingValue(objType, map[string]string{
+			"id": "7:" + name, "cluster_id": "7", "name": name, "setting_id": "1",
+		})
+		req := resource.ReadRequest{State: tfsdk.State{Schema: sr.Schema, Raw: stateVal}}
+		resp := resource.ReadResponse{State: tfsdk.State{Schema: sr.Schema, Raw: stateVal}}
+		r.Read(context.Background(), req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+		var state settingResourceModel
+		resp.State.Get(context.Background(), &state)
+		return state
+	}
+
+	secret := read("interserver_http_credentials/password")
+	assert.True(t, secret.Value.IsNull())
+	assert.Equal(t, "example-secret/password", secret.ValueFrom.ValueString())
+
+	plain := read("max_threads")
+	assert.Equal(t, "16", plain.Value.ValueString())
+	assert.True(t, plain.ValueFrom.IsNull(), "empty valueFrom reads back as null")
+}
+
+func TestSettingResource_UpdateClearsValueFrom(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		buf, _ := io.ReadAll(req.Body)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"42","name":"max_threads","value":"32"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := acm.NewClient(srv.URL, "test-token", acm.WithHTTPClient(srv.Client()))
+
+	r := newSettingResource(client)
+	objType, sr := settingObjType(t, r)
+
+	plan := settingValue(objType, map[string]string{
+		"id": "7:max_threads", "cluster_id": "7", "name": "max_threads", "value": "32", "setting_id": "42",
+	})
+	state := settingValue(objType, map[string]string{
+		"id": "7:max_threads", "cluster_id": "7", "name": "max_threads", "value_from": "example-secret/key", "setting_id": "42",
+	})
+	req := resource.UpdateRequest{
+		Plan:  tfsdk.Plan{Schema: sr.Schema, Raw: plan},
+		State: tfsdk.State{Schema: sr.Schema, Raw: state},
+	}
+	resp := resource.UpdateResponse{State: tfsdk.State{Schema: sr.Schema, Raw: state}}
+	r.Update(context.Background(), req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+
+	assert.Contains(t, gotBody, `"value":"32"`)
+	assert.Contains(t, gotBody, `"valueFrom":""`, "switching to a plain value must clear the reference")
+}
+
+func TestSettingResource_ValidateConfigExactlyOne(t *testing.T) {
+	r := newSettingResource(nil)
+	objType, sr := settingObjType(t, r)
+
+	cases := map[string]struct {
+		attrs   map[string]string
+		wantErr bool
+	}{
+		"value only":      {map[string]string{"cluster_id": "7", "name": "n", "value": "1"}, false},
+		"value_from only": {map[string]string{"cluster_id": "7", "name": "n", "value_from": "s/k"}, false},
+		"neither":         {map[string]string{"cluster_id": "7", "name": "n"}, true},
+		"both":            {map[string]string{"cluster_id": "7", "name": "n", "value": "1", "value_from": "s/k"}, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: sr.Schema, Raw: settingValue(objType, tc.attrs)}}
+			var resp resource.ValidateConfigResponse
+			r.ValidateConfig(context.Background(), req, &resp)
+			assert.Equal(t, tc.wantErr, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
+		})
+	}
+}

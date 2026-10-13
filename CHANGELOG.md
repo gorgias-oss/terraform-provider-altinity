@@ -6,6 +6,13 @@ and the provider follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `altinity_clickhouse_cluster_setting` — new optional `value_from` attribute
+  (a Kubernetes secret reference, `<secret-name>/<key>`) for settings that ACM
+  resolves from a secret. `value` is now optional; exactly one of `value` and
+  `value_from` must be set. Existing configs that set `value` are unchanged.
+
 ## [0.2.1] — 2026-06-19
 
 ### Fixed

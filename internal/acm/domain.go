@@ -203,6 +203,9 @@ type Setting struct {
 	Name string
 	// Value is the setting value.
 	Value string
+	// ValueFrom is a Kubernetes secret reference ("<secret-name>/<key>") that
+	// ACM resolves in place of Value. Empty when the setting uses Value.
+	ValueFrom string
 }
 
 // Environment is the clean domain view of an Altinity.Cloud environment
